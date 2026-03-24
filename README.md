@@ -208,15 +208,15 @@ The model doesn't cherry-pick a weak benchmark. It's compared against the alloca
 
 Over the 21.2-year backtest period (Dec 2004 to Jan 2026, 254 months):
 
-| Metric | Model | Equity | 60/40 | 90/10 Baseline |
-|:---|---:|---:|---:|---:|
-| CAGR | 10.76% | 10.60% | 7.29% | 9.80% |
-| Total Return | 770% | 744% | 343% | 624% |
-| Volatility | 10.77% | 14.78% | 8.87% | 13.30% |
-| Sharpe | 1.00 | 0.72 | 0.82 | 0.74 |
-| Sortino | 1.56 | 0.97 | 1.11 | 0.99 |
-| Max Drawdown | -22.08% | -50.78% | -33.15% | -46.79% |
-| Max DD Duration | 20 mo | 52 mo | 41 mo | 52 mo |
+| Metric | Model | Equity | 60/40 |
+|:---|---:|---:|---:|
+| CAGR | 10.76% | 10.60% | 7.29% |
+| Total Return | 770% | 744% | 343% |
+| Volatility | 10.77% | 14.78% | 8.87% |
+| Sharpe | 1.00 | 0.72 | 0.82 | 
+| Sortino | 1.56 | 0.97 | 1.11 |
+| Max Drawdown | -22.08% | -50.78% | -33.15% |
+| Max DD Duration | 20 mo | 52 mo | 41 mo | 
 
 The key result is not the CAGR — it's the **drawdown reduction**. The model captures nearly all of the equity premium (10.76% vs 10.60%) while cutting the maximum drawdown by more than half (-22% vs -51%). The Sharpe ratio improves from 0.72 to 1.00, and the Sortino ratio (which specifically penalizes downside volatility) improves from 0.97 to 1.56.
 
