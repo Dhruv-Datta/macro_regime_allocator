@@ -51,6 +51,8 @@ def main():
     print(f"  T-Bills:       fed funds rate")
     print(f"  Horizon:       {cfg.forecast_horizon_months} months")
     print(f"  Window:        {cfg.window_type}")
+    print(f"  Start date:    {cfg.start_date}  (data from {cfg.data_start_date})")
+    print(f"  Min train:     {cfg.min_train_months} months (auto-backdated)")
     print("=" * 60)
 
     # Step 1: Load data

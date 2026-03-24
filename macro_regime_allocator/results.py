@@ -566,7 +566,7 @@ def generate_all_plots(bt: pd.DataFrame, eval_results: dict, cfg: Config):
     ax.plot(bt.index, bt["cum_tbills"], label="T-Bills Only",
             linewidth=1, linestyle="--", alpha=0.6)
     ax.set_title("Cumulative Returns: Model vs Benchmarks")
-    ax.set_ylabel("Growth of $1")
+    ax.set_ylabel("Growth of $100")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))

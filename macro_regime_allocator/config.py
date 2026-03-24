@@ -103,6 +103,17 @@ class Config:
     drawdown_defense_threshold: float = _Y.get("drawdown_defense_threshold", -15.0)
     credit_spike_threshold: float = _Y.get("credit_spike_threshold", 1.5)
 
+    @property
+    def data_start_date(self) -> str:
+        """Backdate start_date so the model has enough training data and
+        predictions begin AT start_date.  Accounts for min_train_months,
+        forecast horizon, macro lag, and feature-engineering lookback."""
+        import pandas as pd
+        dt = pd.Timestamp(self.start_date)
+        backdate = (self.min_train_months + self.forecast_horizon_months
+                    + self.macro_lag_months + 18)  # 18 for 12mo YoY + buffer
+        return (dt - pd.DateOffset(months=backdate)).strftime("%Y-%m-%d")
+
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"
     output_dir: str = "outputs"

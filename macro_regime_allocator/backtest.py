@@ -252,14 +252,30 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     bt = pd.DataFrame(results).set_index("return_date")
     bt.index.name = "date"
 
-    # Cumulative series
+    # Filter to only include predictions from start_date onward
+    bt = bt[bt.index >= pd.Timestamp(cfg.start_date)]
+    print(f"  Predictions after start_date ({cfg.start_date}): {len(bt)}")
+    if bt.empty:
+        raise RuntimeError(f"No predictions on or after start_date {cfg.start_date}.")
+
+    # Cumulative series (starts at 1.0 on the first date)
+    cum_cols = []
     for col, src in [("cum_port", "port_return"), ("cum_ew", "ew_return"),
                      ("cum_equity", "ret_equity"), ("cum_tbills", "ret_tbills"),
                      ("cum_6040", "ret_6040")]:
-        bt[col] = (1 + bt[src]).cumprod()
+        bt[col] = 100 * (1 + bt[src]).cumprod()
+        cum_cols.append(col)
+
+    # Prepend a $1.00 starting row so charts begin at 1.0
+    start_date = bt.index[0] - pd.DateOffset(months=1)
+    start_row = pd.DataFrame(
+        {c: [100.0] if c in cum_cols else [np.nan] for c in bt.columns},
+        index=pd.DatetimeIndex([start_date], name="date"),
+    )
+    bt = pd.concat([start_row, bt])
 
     bt["turnover"] = bt[["weight_equity", "weight_tbills"]].diff().abs().sum(axis=1)
-    bt.at[bt.index[0], "turnover"] = 0
+    bt["turnover"] = bt["turnover"].fillna(0)
 
     # Save backtest results
     os.makedirs(cfg.output_dir, exist_ok=True)

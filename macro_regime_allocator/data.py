@@ -18,9 +18,8 @@ def _download_asset_prices(cfg: Config) -> pd.DataFrame:
 
     tickers = list(cfg.asset_tickers.values())
     names = list(cfg.asset_tickers.keys())
-    lookback_start = (pd.Timestamp(cfg.start_date) - pd.DateOffset(months=18)).strftime("%Y-%m-%d")
 
-    raw = yf.download(tickers, start=lookback_start, end=cfg.end_date,
+    raw = yf.download(tickers, start=cfg.data_start_date, end=cfg.end_date,
                       auto_adjust=True, progress=False)
 
     if len(tickers) == 1:
@@ -39,11 +38,10 @@ def _download_vix_data(cfg: Config) -> pd.DataFrame:
     import yfinance as yf
 
     vix_data = pd.DataFrame()
-    lookback_start = (pd.Timestamp(cfg.start_date) - pd.DateOffset(months=18)).strftime("%Y-%m-%d")
 
     for ticker, col in [(cfg.vix_ticker, "vix"), (cfg.vix3m_ticker, "vix3m")]:
         try:
-            raw = yf.download(ticker, start=lookback_start, end=cfg.end_date,
+            raw = yf.download(ticker, start=cfg.data_start_date, end=cfg.end_date,
                               auto_adjust=True, progress=False)
             vix_data[col] = raw["Close"].resample("ME").last()
             print(f"  Downloaded {col.upper()}: {len(vix_data[col].dropna())} monthly obs")
@@ -63,7 +61,7 @@ def _download_fred_data(cfg: Config) -> pd.DataFrame:
 
     fred = Fred(api_key=cfg.fred_api_key)
     series_dict = {}
-    start = pd.Timestamp(cfg.start_date) - pd.DateOffset(months=18)
+    start = pd.Timestamp(cfg.data_start_date)
     end = pd.Timestamp(cfg.end_date)
 
     for name, series_id in cfg.fred_series.items():
