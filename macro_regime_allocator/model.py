@@ -1,10 +1,7 @@
 """
 Classification model for macro regime prediction.
 
-Two modes:
-  - "logistic":     Full retrain each step (LogisticRegression)
-  - "incremental":  Online learning via SGDClassifier with partial_fit
-                    Model carries forward between steps and updates on new data.
+Retrains a LogisticRegression from scratch at each backtest step.
 """
 
 import os
@@ -12,44 +9,25 @@ import numpy as np
 import pandas as pd
 import joblib
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.linear_model import LogisticRegression
 from config import Config
 
 
 class RegimeClassifier:
-    """Wraps a scikit-learn classifier for binary regime classification."""
+    """Wraps a scikit-learn LogisticRegression for binary regime classification."""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.scaler = StandardScaler()
-        self.classifier = self._build_classifier()
+        self.classifier = LogisticRegression(
+            C=cfg.regularization_C,
+            class_weight=cfg.class_weight,
+            max_iter=cfg.max_iter,
+            solver="lbfgs",
+            random_state=42,
+        )
         self.feature_names: list = []
         self._is_fitted = False
-
-    def _build_classifier(self):
-        if self.cfg.model_type == "logistic":
-            return LogisticRegression(
-                C=self.cfg.regularization_C,
-                class_weight=self.cfg.class_weight,
-                max_iter=self.cfg.max_iter,
-                solver="lbfgs",
-                random_state=42,
-            )
-        elif self.cfg.model_type == "incremental":
-            # class_weight="balanced" doesn't work with partial_fit on
-            # single-class batches, so we leave it None and handle
-            # weighting via sample_weight in the caller instead.
-            return SGDClassifier(
-                loss="log_loss",
-                alpha=self.cfg.sgd_alpha,
-                class_weight=None,
-                max_iter=1000,
-                tol=1e-3,
-                random_state=42,
-                warm_start=True,
-            )
-        else:
-            raise ValueError(f"Unknown model_type: {self.cfg.model_type}")
 
     def fit(self, X: pd.DataFrame, y: pd.Series,
             sample_weight: np.ndarray = None):
@@ -58,33 +36,6 @@ class RegimeClassifier:
         X_scaled = self.scaler.fit_transform(X.values)
         self.classifier.fit(X_scaled, y.values, sample_weight=sample_weight)
         self._is_fitted = True
-        return self
-
-    def partial_fit(self, X: pd.DataFrame, y: pd.Series,
-                    sample_weight: np.ndarray = None):
-        """
-        Incremental update. Only available for SGDClassifier.
-        On first call, does initial fit. After that, updates existing weights.
-        """
-        if self.cfg.model_type != "incremental":
-            raise RuntimeError("partial_fit only available with model_type='incremental'")
-
-        self.feature_names = list(X.columns)
-        classes = np.array([0, 1])
-
-        if not self._is_fitted:
-            # First call: fit the scaler on initial batch
-            X_scaled = self.scaler.fit_transform(X.values)
-            self.classifier.partial_fit(X_scaled, y.values, classes=classes,
-                                        sample_weight=sample_weight)
-            self._is_fitted = True
-        else:
-            # Keep feature scaling current as the data distribution evolves.
-            self.scaler.partial_fit(X.values)
-            X_scaled = self.scaler.transform(X.values)
-            self.classifier.partial_fit(X_scaled, y.values,
-                                        sample_weight=sample_weight)
-
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
@@ -126,9 +77,3 @@ class RegimeClassifier:
         self._is_fitted = data["is_fitted"]
         print(f"  Model loaded from {path}")
         return self
-
-    def save_checkpoint(self, step: int, cfg: Config):
-        """Save a timestamped checkpoint."""
-        os.makedirs(cfg.checkpoint_dir, exist_ok=True)
-        path = os.path.join(cfg.checkpoint_dir, f"model_step_{step:04d}.joblib")
-        self.save_model(path)

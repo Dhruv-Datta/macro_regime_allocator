@@ -176,10 +176,6 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     horizon = cfg.forecast_horizon_months
     ew = np.array(cfg.equal_weight)
 
-    if cfg.model_type == "incremental":
-        persistent_model = RegimeClassifier(cfg)
-        last_trained_idx = 0
-
     results = []
     prev_equity_weight = cfg.equal_weight[0]
 
@@ -193,45 +189,17 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
             continue
 
         # ── Train ───────────────────────────────────────────────────────
-        if cfg.model_type == "logistic":
-            train_start = 0 if cfg.window_type == "expanding" else max(0, train_end - cfg.rolling_window_months)
-            train_idx = all_dates[train_start:train_end]
-            X_train, y_train = X.loc[train_idx], y.loc[train_idx]
+        train_start = 0 if cfg.window_type == "expanding" else max(0, train_end - cfg.rolling_window_months)
+        train_idx = all_dates[train_start:train_end]
+        X_train, y_train = X.loc[train_idx], y.loc[train_idx]
 
-            if len(y_train) < cfg.min_train_months or y_train.nunique() < 2:
-                continue
+        if len(y_train) < cfg.min_train_months or y_train.nunique() < 2:
+            continue
 
-            sw = _recency_weights(len(train_idx), cfg.recency_halflife_months)
-            cw = _class_balanced_weights(y_train.values)
-            model = RegimeClassifier(cfg)
-            model.fit(X_train, y_train, sample_weight=sw * cw)
-
-        elif cfg.model_type == "incremental":
-            if not persistent_model.is_fitted:
-                warmup_idx = all_dates[:train_end]
-                if len(warmup_idx) < cfg.min_train_months:
-                    continue
-                X_warmup, y_warmup = X.loc[warmup_idx], y.loc[warmup_idx]
-                if y_warmup.nunique() < 2:
-                    continue
-                sw = _recency_weights(len(warmup_idx), cfg.recency_halflife_months)
-                cw = _class_balanced_weights(y_warmup.values)
-                persistent_model.fit(X_warmup, y_warmup, sample_weight=sw * cw)
-                last_trained_idx = train_end
-            else:
-                new_idx = all_dates[last_trained_idx:train_end]
-                if new_idx:
-                    X_new, y_new = X.loc[new_idx], y.loc[new_idx]
-                    if len(y_new) > 0:
-                        sw = _recency_weights(len(new_idx), cfg.recency_halflife_months)
-                        cw = _class_balanced_weights(y_new.values)
-                        persistent_model.partial_fit(X_new, y_new, sample_weight=sw * cw)
-                    last_trained_idx = train_end
-
-            model = persistent_model
-            step_num = i - cfg.min_train_months
-            if cfg.checkpoint_every > 0 and step_num % cfg.checkpoint_every == 0:
-                model.save_checkpoint(step_num, cfg)
+        sw = _recency_weights(len(train_idx), cfg.recency_halflife_months)
+        cw = _class_balanced_weights(y_train.values)
+        model = RegimeClassifier(cfg)
+        model.fit(X_train, y_train, sample_weight=sw * cw)
 
         # ── Predict & allocate ──────────────────────────────────────────
         proba = model.predict_proba(X.loc[[rebalance_date]])[0]

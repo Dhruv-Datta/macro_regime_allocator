@@ -1,48 +1,40 @@
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║              MACRO REGIME ALLOCATOR — Configuration                 ║
-# ║  Change these values to control how the model trains & allocates.   ║
-# ╚══════════════════════════════════════════════════════════════════════╝
+# ======================================================================
+#              MACRO REGIME ALLOCATOR -- Configuration
+#  Change these values to control how the model trains & allocates.
+# ======================================================================
 
-# ── Date Range ────────────────────────────────────────────────────────
+# -- Date Range --------------------------------------------------------
 # How far back to train and how far forward to test
 start_date: "2000-01-01"
 end_date: "2026-03-01"
 
-# ── Assets ────────────────────────────────────────────────────────────
+# -- Assets ------------------------------------------------------------
 equity_ticker: "SPY"        # what we buy when bullish
 
-# ── Forecast ──────────────────────────────────────────────────────────
+# -- Forecast ----------------------------------------------------------
 # How many months ahead the model predicts (1 = most responsive)
 forecast_horizon_months: 1
 
-# ── Feature Engineering ───────────────────────────────────────────────
+# -- Feature Engineering -----------------------------------------------
 macro_lag_months: 1          # lag all features by N months (prevents lookahead)
 momentum_window: 3           # months for equity momentum calculation
 volatility_window: 3         # months for equity volatility calculation
 
-# ── Model ─────────────────────────────────────────────────────────────
-# "logistic" = retrain from scratch each step (LogisticRegression)
-# "incremental" = online updates via SGDClassifier with partial_fit
-model_type: "logistic"
-
+# -- Model -------------------------------------------------------------
 regularization_C: 0.5        # inverse regularization (higher = less regularization, more flexible)
 class_weight: "balanced"     # auto-balance for uneven equity/tbills label counts
 max_iter: 1000               # max solver iterations
 
-# SGD-specific (only used when model_type = "incremental")
-sgd_alpha: 0.005             # learning rate for SGD
-checkpoint_every: 12         # save model checkpoint every N steps
-
-# ── Training ──────────────────────────────────────────────────────────
+# -- Training ----------------------------------------------------------
 recency_halflife_months: 18  # recent data weighted more (lower = more responsive)
 window_type: "expanding"     # "expanding" = all history, "rolling" = fixed window
 rolling_window_months: 120   # only used when window_type = "rolling"
 min_train_months: 36         # minimum months of data before first prediction
 
-# ── Allocation ────────────────────────────────────────────────────────
+# -- Allocation --------------------------------------------------------
 # Baseline weights when model is neutral (P = 0.50)
-baseline_equity: 0.95        # 75% equity at neutral — model must see danger to go defensive
-baseline_tbills: 0.05
+baseline_equity: 0.90        # 75% equity at neutral -- model must see danger to go defensive
+baseline_tbills: 0.10
 
 min_weight: 0.03             # floor per asset (5% minimum in each)
 max_weight: 0.97             # cap per asset (95% maximum in each)
@@ -58,7 +50,7 @@ allocation_steepness: 10.0
 weight_smoothing_up: 0.7     # 0.0 = no change, 1.0 = instant
 weight_smoothing_down: 1.0   # 1.0 = instant defense, no delay
 
-# ── Crash Overlay ─────────────────────────────────────────────────────
+# -- Crash Overlay -----------------------------------------------------
 # Real-time defensive triggers using current (unlagged) market data
 crash_overlay: true
 

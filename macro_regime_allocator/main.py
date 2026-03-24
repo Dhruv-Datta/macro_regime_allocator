@@ -28,7 +28,6 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 def parse_args():
     parser = argparse.ArgumentParser(description="Macro Regime Allocator")
     parser.add_argument("--window", choices=["expanding", "rolling"], default=None)
-    parser.add_argument("--model", choices=["logistic", "incremental"], default=None)
     parser.add_argument("--horizon", type=int, default=None,
                         help="Forecast horizon in months (default: 1)")
     parser.add_argument("--skip-download", action="store_true")
@@ -42,8 +41,6 @@ def main():
 
     if args.window:
         cfg.window_type = args.window
-    if args.model:
-        cfg.model_type = args.model
     if args.horizon:
         cfg.forecast_horizon_months = args.horizon
 
@@ -54,7 +51,6 @@ def main():
     print(f"  T-Bills:       fed funds rate")
     print(f"  Horizon:       {cfg.forecast_horizon_months} months")
     print(f"  Window:        {cfg.window_type}")
-    print(f"  Model:         {cfg.model_type}")
     print("=" * 60)
 
     # Step 1: Load data
@@ -93,7 +89,10 @@ def main():
 
     # Latest prediction
     if args.predict_latest:
-        print("\n── Latest Predicted Allocation ────────────────────────────")
+        from backtest import _gather_market_data
+        print("\n╔══════════════════════════════════════════════════════════════╗")
+        print("║               CURRENT ALLOCATION SIGNAL                     ║")
+        print("╚══════════════════════════════════════════════════════════════╝")
         latest_date = features.index[-1]
         latest_features = features.reindex(columns=final_model.feature_names).iloc[[-1]]
         if latest_features.isna().any(axis=None):
@@ -101,13 +100,37 @@ def main():
             raise ValueError(f"Latest features missing: {missing}")
 
         proba = final_model.predict_proba(latest_features)[0]
-        _, weights, _ = probabilities_to_weights(proba, cfg)
 
-        print(f"  As of: {latest_date.strftime('%Y-%m')}")
+        # Apply crash overlay with current market data
+        market_data = _gather_market_data(merged, latest_date)
+        raw_proba, weights, overlay_reason = probabilities_to_weights(proba, cfg, market_data)
+
+        # Apply smoothing against last backtest weight if available
+        if len(bt) > 0:
+            prev_eq = bt["weight_equity"].iloc[-1]
+            target_eq = weights[0]
+            alpha = cfg.weight_smoothing_up if target_eq >= prev_eq else cfg.weight_smoothing_down
+            import numpy as np
+            smoothed_eq = np.clip(alpha * target_eq + (1 - alpha) * prev_eq,
+                                  cfg.min_weight, cfg.max_weight)
+            weights = np.array([smoothed_eq, 1.0 - smoothed_eq])
+
+        print(f"  As of:                   {latest_date.strftime('%Y-%m')}")
         print(f"  P(equity beats T-bills): {proba[0]:.3f}")
-        print(f"  Final weights:")
+        print(f"  P(T-bills win):          {proba[1]:.3f}")
+        print(f"  Crash overlay:           {overlay_reason}")
+        if market_data:
+            print(f"  Market signals:")
+            for k, v in sorted(market_data.items()):
+                print(f"    {k:>28s}: {v:+.2f}")
+        print(f"")
+        print(f"  ┌─────────────────────────────────┐")
+        print(f"  │  RECOMMENDED ALLOCATION          │")
         for i, name in enumerate(cfg.asset_classes):
-            print(f"    {name:>10s}: {weights[i]:.1%}")
+            bar_len = int(weights[i] * 20)
+            bar = "█" * bar_len + "░" * (20 - bar_len)
+            print(f"  │  {name:>8s}: {weights[i]:6.1%}  {bar} │")
+        print(f"  └─────────────────────────────────┘")
 
     print("\n" + "=" * 60)
     print("  DONE")

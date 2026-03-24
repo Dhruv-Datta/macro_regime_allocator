@@ -73,16 +73,10 @@ class Config:
     volatility_window: int = _Y.get("volatility_window", 3)
 
     # ── Model ───────────────────────────────────────────────────────────
-    model_type: str = _Y.get("model_type", "logistic")
     regularization_C: float = _Y.get("regularization_C", 0.5)
-    sgd_alpha: float = _Y.get("sgd_alpha", 0.005)
     class_weight: Optional[str] = _Y.get("class_weight", "balanced")
     max_iter: int = _Y.get("max_iter", 1000)
-
-    # Incremental learning settings
-    incremental_warmstart: bool = True
     recency_halflife_months: int = _Y.get("recency_halflife_months", 18)
-    checkpoint_every: int = _Y.get("checkpoint_every", 12)
 
     # ── Backtest ────────────────────────────────────────────────────────
     window_type: str = _Y.get("window_type", "expanding")
@@ -114,7 +108,6 @@ class Config:
     output_dir: str = "outputs"
     plot_dir: str = "outputs/plots"
     model_path: str = "outputs/model.joblib"
-    checkpoint_dir: str = "outputs/checkpoints"
 
     # ── Asset class names (order matters) ───────────────────────────────
     asset_classes: List[str] = field(

@@ -103,7 +103,6 @@ def _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
     w(f"")
     w(f"**Config:** equity={cfg.asset_tickers['equity']}, "
       f"horizon={cfg.forecast_horizon_months}mo, "
-      f"model={cfg.model_type}, "
       f"window={cfg.window_type}, "
       f"baseline={ew_label}")
     w(f"")
