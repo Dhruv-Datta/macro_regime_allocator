@@ -12,20 +12,16 @@ import matplotlib.dates as mdates
 from config import Config
 
 
-def _benchmark_labels(cfg: Config):
-    ew = f"{int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)} Baseline"
-    static = (f"{int(cfg.static_benchmark_weights[0]*100)}/"
-              f"{int(cfg.static_benchmark_weights[1]*100)} Static")
-    return ew, static
+def _benchmark_label(cfg: Config):
+    return f"{int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)}"
 
 
 def plot_cumulative_returns(bt: pd.DataFrame, cfg: Config):
-    ew_label, static_label = _benchmark_labels(cfg)
+    ew_label = _benchmark_label(cfg)
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(bt.index, bt["cum_port"], label="Model Portfolio", linewidth=2)
     ax.plot(bt.index, bt["cum_ew"], label=ew_label, linewidth=1.5, alpha=0.8)
-    ax.plot(bt.index, bt["cum_static"], label=static_label, linewidth=1.5, alpha=0.8)
-    ax.plot(bt.index, bt["cum_equity"], label="Equity Only",
+    ax.plot(bt.index, bt["cum_equity"], label="Equity Only (SPY)",
             linewidth=1, linestyle="--", alpha=0.6)
     ax.plot(bt.index, bt["cum_safe"], label="Safe Rate Only",
             linewidth=1, linestyle="--", alpha=0.6)
@@ -43,9 +39,9 @@ def plot_cumulative_returns(bt: pd.DataFrame, cfg: Config):
 def plot_drawdowns(bt: pd.DataFrame, cfg: Config):
     fig, ax = plt.subplots(figsize=(12, 4))
 
-    ew_label, _ = _benchmark_labels(cfg)
+    ew_label = _benchmark_label(cfg)
     for col, label in [("port_return", "Model"), ("ew_return", ew_label),
-                        ("ret_equity", "Equity Only")]:
+                        ("ret_equity", "Equity Only (SPY)")]:
         cum = (1 + bt[col]).cumprod()
         dd = cum / cum.cummax() - 1
         ax.fill_between(bt.index, dd, 0, alpha=0.3, label=label)
@@ -108,9 +104,9 @@ def plot_probabilities_over_time(bt: pd.DataFrame, cfg: Config):
 def plot_rolling_sharpe(bt: pd.DataFrame, cfg: Config, window: int = 24):
     fig, ax = plt.subplots(figsize=(12, 5))
 
-    ew_label, _ = _benchmark_labels(cfg)
+    ew_label = _benchmark_label(cfg)
     for col, label in [("port_return", "Model"), ("ew_return", ew_label),
-                        ("ret_equity", "Equity Only")]:
+                        ("ret_equity", "Equity Only (SPY)")]:
         rolling_mean = bt[col].rolling(window).mean() * 12
         rolling_std = bt[col].rolling(window).std() * np.sqrt(12)
         rolling_sharpe = rolling_mean / rolling_std

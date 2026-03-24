@@ -153,5 +153,3 @@ def get_equal_weights(cfg: Config) -> np.ndarray:
     return np.array(cfg.equal_weight)
 
 
-def get_static_benchmark_weights(cfg: Config) -> np.ndarray:
-    return np.array(cfg.static_benchmark_weights)

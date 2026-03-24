@@ -78,8 +78,11 @@ def compute_vix_features(df: pd.DataFrame) -> pd.DataFrame:
     # > 1 = backwardation (panic), < 1 = contango (calm)
     if "vix3m" in df.columns:
         feats["vix_term_structure"] = df["vix"] / df["vix3m"]
+        # VIX3M only starts ~2006-07; fill earlier dates with 1.0 (neutral/contango)
+        feats["vix_term_structure"] = feats["vix_term_structure"].fillna(1.0)
     else:
-        print("  WARNING: No VIX3M data, skipping term structure")
+        print("  WARNING: No VIX3M data, defaulting term structure to 1.0 (neutral)")
+        feats["vix_term_structure"] = 1.0
 
     return feats
 

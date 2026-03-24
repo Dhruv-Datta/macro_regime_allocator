@@ -14,7 +14,6 @@ from model import RegimeClassifier
 from allocation import (
     probabilities_to_weights,
     get_equal_weights,
-    get_static_benchmark_weights,
 )
 
 
@@ -206,8 +205,7 @@ def run_backtest(
 
         ew = get_equal_weights(cfg)
         ew_ret = np.dot(ew, realized)
-        static_w = get_static_benchmark_weights(cfg)
-        static_ret = np.dot(static_w, realized)
+
 
         actual_label = y.loc[rebalance_date] if rebalance_date in y.index else np.nan
 
@@ -225,7 +223,6 @@ def run_backtest(
             "ret_safe": ret_safe,
             "port_return": port_ret,
             "ew_return": ew_ret,
-            "static_return": static_ret,
             "holding_period_months": 1,
             "train_size": train_end,
         })
@@ -242,7 +239,6 @@ def run_backtest(
 
     bt["cum_port"] = (1 + bt["port_return"]).cumprod()
     bt["cum_ew"] = (1 + bt["ew_return"]).cumprod()
-    bt["cum_static"] = (1 + bt["static_return"]).cumprod()
     bt["cum_equity"] = (1 + bt["ret_equity"]).cumprod()
     bt["cum_safe"] = (1 + bt["ret_safe"]).cumprod()
 
@@ -258,7 +254,7 @@ def run_backtest(
     bt[["prob_equity", "prob_safe"]].to_csv(
         os.path.join(cfg.output_dir, "monthly_probabilities.csv")
     )
-    bt[["port_return", "ew_return", "static_return"]].to_csv(
+    bt[["port_return", "ew_return"]].to_csv(
         os.path.join(cfg.output_dir, "monthly_returns.csv")
     )
     print(f"  Backtest results saved to {cfg.output_dir}/")

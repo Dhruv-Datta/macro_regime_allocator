@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 @dataclass
 class Config:
     # ── Date range ──────────────────────────────────────────────────────
-    start_date: str = "2005-01-01"
+    start_date: str = "2000-01-01"
     end_date: str = "2026-03-01"
 
     # ── Asset proxies ───────────────────────────────────────────────────
@@ -39,6 +39,12 @@ class Config:
         "credit_spread":    "BAMLH0A0HYM2",
         "industrial_prod":  "INDPRO",
     })
+
+    # Series that get revised after initial release (CPI, unemployment, etc.)
+    # These use ALFRED first-release data to avoid lookahead from revisions
+    fred_revisable_series: List[str] = field(default_factory=lambda: [
+        "cpi", "core_cpi", "unemployment", "industrial_prod",
+    ])
 
     fred_api_key: Optional[str] = field(
         default_factory=lambda: os.environ.get("FRED_API_KEY")
@@ -74,11 +80,11 @@ class Config:
     min_train_months: int = 36
 
     # ── Allocation ──────────────────────────────────────────────────────
-    # Equity-biased: default to 70% equity, only go defensive on strong signal
+    # Baseline: 60/40 equity/safe
     min_weight: float = 0.05             # per-asset floor (allows 95% equity)
     max_weight: float = 0.95             # per-asset cap
     confidence_blend: bool = True
-    equal_weight: List[float] = field(default_factory=lambda: [0.70, 0.30])
+    equal_weight: List[float] = field(default_factory=lambda: [0.60, 0.40])
 
     # Aggressive sigmoid: amplifies model probability into bigger weight swings
     allocation_steepness: float = 10.0   # higher = sharper transitions
@@ -89,11 +95,6 @@ class Config:
     vix_spike_threshold: float = 8.0     # VIX 1m change above this = danger
     drawdown_defense_threshold: float = -12.0 # equity drawdown % triggers defense
     credit_spike_threshold: float = 1.0  # credit spread 3m widening = danger
-
-    # ── Benchmarks ──────────────────────────────────────────────────────
-    static_benchmark_weights: List[float] = field(
-        default_factory=lambda: [0.60, 0.40]  # 60/40 equity/safe
-    )
 
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"

@@ -155,13 +155,10 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
     clf_metrics = classification_metrics(bt, cfg)
 
     print("\n── Investment Metrics ──────────────────────────────────────")
-    ew_label = f"Baseline {int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)}"
-    static_label = (f"Static {int(cfg.static_benchmark_weights[0]*100)}/"
-                    f"{int(cfg.static_benchmark_weights[1]*100)}")
+    ew_label = f"{int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)}"
     strategies = {
         "Model Portfolio": bt["port_return"],
         ew_label: bt["ew_return"],
-        static_label: bt["static_return"],
         "Equity Only": bt["ret_equity"],
         "Safe Rate Only": bt["ret_safe"],
     }
