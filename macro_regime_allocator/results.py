@@ -27,11 +27,274 @@ def _investment_metrics(returns: pd.Series, label: str) -> dict:
     vol = returns.std() * np.sqrt(12)
     sharpe = cagr / vol if vol > 0 else 0
     cum = (1 + returns).cumprod()
-    max_dd = (cum / cum.cummax() - 1).min()
+    drawdowns = cum / cum.cummax() - 1
+    max_dd = drawdowns.min()
     hit_rate = (returns > 0).mean()
-    return {"label": label, "cagr": cagr, "volatility": vol, "sharpe": sharpe,
-            "max_drawdown": max_dd, "hit_rate": hit_rate, "total_return": cum_ret - 1,
-            "n_months": n_months}
+
+    # Sortino (downside deviation)
+    downside = returns[returns < 0]
+    downside_std = downside.std() * np.sqrt(12) if len(downside) > 1 else vol
+    sortino = cagr / downside_std if downside_std > 0 else 0
+
+    # Calmar (CAGR / |max drawdown|)
+    calmar = cagr / abs(max_dd) if max_dd != 0 else 0
+
+    # VaR and CVaR (95%)
+    var_95 = np.percentile(returns, 5)
+    cvar_95 = returns[returns <= var_95].mean() if (returns <= var_95).any() else var_95
+
+    # Best / worst months
+    best_month = returns.max()
+    worst_month = returns.min()
+
+    # Max drawdown duration (months)
+    in_dd = drawdowns < 0
+    dd_groups = (~in_dd).cumsum()
+    dd_durations = in_dd.groupby(dd_groups).sum()
+    max_dd_duration = int(dd_durations.max()) if len(dd_durations) > 0 else 0
+
+    # Winning / losing streaks
+    signs = (returns > 0).astype(int)
+    streaks = signs.groupby((signs != signs.shift()).cumsum())
+    win_streak = max((len(g) for _, g in streaks if g.iloc[0] == 1), default=0)
+    lose_streak = max((len(g) for _, g in streaks if g.iloc[0] == 0), default=0)
+
+    # Average up month / average down month
+    avg_up = returns[returns > 0].mean() if (returns > 0).any() else 0
+    avg_down = returns[returns < 0].mean() if (returns < 0).any() else 0
+
+    # Up/down capture ratio
+    up_down_ratio = abs(avg_up / avg_down) if avg_down != 0 else float("inf")
+
+    return {
+        "label": label, "cagr": cagr, "volatility": vol, "sharpe": sharpe,
+        "sortino": sortino, "calmar": calmar,
+        "max_drawdown": max_dd, "max_dd_duration": max_dd_duration,
+        "var_95": var_95, "cvar_95": cvar_95,
+        "hit_rate": hit_rate, "total_return": cum_ret - 1,
+        "best_month": best_month, "worst_month": worst_month,
+        "avg_up_month": avg_up, "avg_down_month": avg_down,
+        "up_down_ratio": up_down_ratio,
+        "win_streak": win_streak, "lose_streak": lose_streak,
+        "n_months": n_months,
+    }
+
+
+# ── Report Export ──────────────────────────────────────────────────────────
+
+def _fmt_pct(v, decimals=2):
+    return f"{v * 100:.{decimals}f}%"
+
+def _fmt_f(v, decimals=2):
+    return f"{v:.{decimals}f}"
+
+
+def _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
+                 dir_acc, weighted_acc, upside_cap, downside_cap,
+                 clf_acc, bal_acc, cm_df, ew_label):
+    """Write a full performance report to outputs/report.md."""
+    from datetime import datetime
+    lines = []
+    w = lines.append
+
+    w(f"# Macro Regime Allocator — Performance Report")
+    w(f"")
+    w(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+    w(f"")
+    w(f"**Config:** equity={cfg.asset_tickers['equity']}, "
+      f"horizon={cfg.forecast_horizon_months}mo, "
+      f"model={cfg.model_type}, "
+      f"window={cfg.window_type}, "
+      f"baseline={ew_label}")
+    w(f"")
+    w(f"**Period:** {bt.index[0].strftime('%Y-%m')} to {bt.index[-1].strftime('%Y-%m')} "
+      f"({len(bt)} months / {len(bt)/12:.1f} years)")
+    w(f"")
+
+    # ── Performance dashboard ──
+    w(f"---")
+    w(f"## Performance Dashboard")
+    w(f"")
+    strats = list(inv_df.index)
+    header = "| Metric | " + " | ".join(strats) + " |"
+    align = "| :--- | " + " | ".join(["---:" for _ in strats]) + " |"
+    w(header)
+    w(align)
+
+    metric_rows = [
+        ("CAGR",            "cagr",           True),
+        ("Total Return",    "total_return",    True),
+        ("Volatility",      "volatility",      True),
+        ("Sharpe",          "sharpe",          False),
+        ("Sortino",         "sortino",         False),
+        ("Calmar",          "calmar",          False),
+        ("Max Drawdown",    "max_drawdown",    True),
+        ("Max DD Duration", "max_dd_duration", False),
+        ("VaR (95%)",       "var_95",          True),
+        ("CVaR (95%)",      "cvar_95",         True),
+        ("Hit Rate",        "hit_rate",        True),
+        ("Best Month",      "best_month",      True),
+        ("Worst Month",     "worst_month",     True),
+        ("Avg Up Month",    "avg_up_month",    True),
+        ("Avg Down Month",  "avg_down_month",  True),
+        ("Up/Down Ratio",   "up_down_ratio",   False),
+        ("Win Streak",      "win_streak",      False),
+        ("Lose Streak",     "lose_streak",     False),
+    ]
+
+    for label, key, is_pct in metric_rows:
+        cells = []
+        for s in strats:
+            v = inv_df.loc[s, key]
+            if key in ("max_dd_duration", "win_streak", "lose_streak"):
+                cells.append(f"{int(v)} mo")
+            elif is_pct:
+                cells.append(_fmt_pct(v))
+            else:
+                cells.append(_fmt_f(v))
+        w(f"| {label} | " + " | ".join(cells) + " |")
+
+    # ── Model vs benchmarks ──
+    w(f"")
+    w(f"---")
+    w(f"## Model vs Benchmarks")
+    w(f"")
+    model_m = inv_df.loc["Model Portfolio"]
+    equity_m = inv_df.loc["Equity Only"]
+    ew_m = inv_df.loc[ew_label]
+
+    w(f"### vs Equity Only")
+    w(f"| Metric | Value |")
+    w(f"| :--- | ---: |")
+    w(f"| CAGR gap | {_fmt_pct(model_m['cagr'] - equity_m['cagr'])} ({'trailing' if model_m['cagr'] < equity_m['cagr'] else 'leading'}) |")
+    w(f"| Drawdown saved | {_fmt_pct(model_m['max_drawdown'] - equity_m['max_drawdown'])} |")
+    w(f"| Sharpe improvement | {_fmt_f(model_m['sharpe'] - equity_m['sharpe'])} |")
+    w(f"| Sortino improvement | {_fmt_f(model_m['sortino'] - equity_m['sortino'])} |")
+    w(f"| Vol reduction | {_fmt_pct(model_m['volatility'] - equity_m['volatility'])} |")
+
+    w(f"")
+    w(f"### vs {ew_label}")
+    w(f"| Metric | Value |")
+    w(f"| :--- | ---: |")
+    w(f"| CAGR gap | {_fmt_pct(model_m['cagr'] - ew_m['cagr'])} |")
+    w(f"| Drawdown saved | {_fmt_pct(model_m['max_drawdown'] - ew_m['max_drawdown'])} |")
+    w(f"| Sharpe improvement | {_fmt_f(model_m['sharpe'] - ew_m['sharpe'])} |")
+
+    # ── Annual returns ──
+    w(f"")
+    w(f"---")
+    w(f"## Annual Returns")
+    w(f"")
+    yr_strats = ["Model", ew_label, "60/40", "Equity", "T-Bills", "Model DD"]
+    w("| Year | " + " | ".join(yr_strats) + " |")
+    w("| :--- | " + " | ".join(["---:" for _ in yr_strats]) + " |")
+    for row in annual_data:
+        cells = []
+        for s in yr_strats:
+            cells.append(_fmt_pct(row[s], 1))
+        w(f"| {row['year']} | " + " | ".join(cells) + " |")
+
+    # Totals
+    total_cells = []
+    for s in yr_strats[:-1]:
+        total_cells.append(_fmt_pct((1 + bt[{"Model": "port_return", ew_label: "ew_return",
+                                              "60/40": "ret_6040", "Equity": "ret_equity",
+                                              "T-Bills": "ret_tbills"}[s]]).prod() - 1, 1))
+    total_cells.append("—")
+    w(f"| **TOTAL** | " + " | ".join(total_cells) + " |")
+
+    model_wins = sum(1 for r in annual_data if r["Model"] > r["Equity"])
+    w(f"")
+    w(f"Model beat equity in **{model_wins}/{len(annual_data)}** years ({model_wins/len(annual_data):.0%})")
+
+    # ── Direction accuracy ──
+    w(f"")
+    w(f"---")
+    w(f"## Direction Accuracy")
+    w(f"")
+    w(f"| Metric | Value |")
+    w(f"| :--- | ---: |")
+    w(f"| Direction accuracy | {_fmt_f(dir_acc, 3)} |")
+    w(f"| Magnitude-weighted accuracy | {_fmt_f(weighted_acc, 3)} |")
+    w(f"| Upside capture | {_fmt_f(upside_cap, 3)} |")
+    w(f"| Downside capture | {_fmt_f(downside_cap, 3)} (lower = better) |")
+
+    # ── Classification ──
+    w(f"")
+    w(f"## Classification Metrics ({cfg.forecast_horizon_months}-month label)")
+    w(f"")
+    w(f"| Metric | Value |")
+    w(f"| :--- | ---: |")
+    w(f"| Accuracy | {_fmt_f(clf_acc, 3)} |")
+    w(f"| Balanced Accuracy | {_fmt_f(bal_acc, 3)} |")
+    w(f"")
+    w(f"**Confusion Matrix:**")
+    w(f"")
+    cm_cols = list(cm_df.columns)
+    w("| | " + " | ".join(f"Pred {c}" for c in cm_cols) + " |")
+    w("| :--- | " + " | ".join(["---:" for _ in cm_cols]) + " |")
+    for idx in cm_df.index:
+        cells = [str(cm_df.loc[idx, c]) for c in cm_cols]
+        w(f"| **{idx}** | " + " | ".join(cells) + " |")
+
+    # ── Weight distribution ──
+    w(f"")
+    w(f"---")
+    w(f"## Weight Distribution")
+    w(f"")
+    w(f"| Metric | Value |")
+    w(f"| :--- | ---: |")
+    w(f"| Mean equity weight | {_fmt_pct(eq_w.mean(), 1)} |")
+    w(f"| Min | {_fmt_pct(eq_w.min(), 1)} |")
+    w(f"| Max | {_fmt_pct(eq_w.max(), 1)} |")
+    w(f"| Avg monthly turnover | {_fmt_f(bt['turnover'].mean(), 3)} |")
+
+    buckets = pd.cut(eq_w, bins=[0, 0.3, 0.5, 0.7, 0.85, 1.0],
+                     labels=["<30%", "30-50%", "50-70%", "70-85%", ">85%"])
+    w(f"")
+    w(f"| Bucket | Months | Share |")
+    w(f"| :--- | ---: | ---: |")
+    for bucket, count in buckets.value_counts().sort_index().items():
+        w(f"| {bucket} | {count} | {_fmt_pct(count/len(eq_w), 0)} |")
+
+    # ── Feature importance ──
+    w(f"")
+    w(f"---")
+    w(f"## Feature Importance (Model Coefficients)")
+    w(f"")
+    w(f"Negative = favors equity, Positive = favors T-bills")
+    w(f"")
+    w(f"| Feature | Coefficient | Direction |")
+    w(f"| :--- | ---: | :--- |")
+    if len(coefs) == 1:
+        row = coefs.iloc[0].sort_values()
+        for feat, val in row.items():
+            direction = "-> tbills" if val > 0 else "-> equity"
+            w(f"| {feat} | {val:+.3f} | {direction} |")
+
+    # ── Crash overlay ──
+    if overlay_stats:
+        w(f"")
+        w(f"---")
+        w(f"## Crash Overlay Stats")
+        w(f"")
+        w(f"| Metric | Value |")
+        w(f"| :--- | ---: |")
+        fired = overlay_stats["months_fired"]
+        total = overlay_stats["total_months"]
+        w(f"| Months fired | {fired}/{total} ({_fmt_pct(fired/total, 1)}) |")
+        if fired > 0:
+            w(f"| Avg equity weight (active) | {_fmt_pct(overlay_stats['avg_eq_weight_active'], 1)} |")
+            w(f"| Avg equity weight (off) | {_fmt_pct(overlay_stats['avg_eq_weight_off'], 1)} |")
+            w(f"| Avg return (active) | {_fmt_pct(overlay_stats['avg_ret_active'])} |")
+            w(f"| Equity return (active) | {_fmt_pct(overlay_stats['avg_eq_ret_active'])} |")
+
+    # Write file
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    report_path = os.path.join(cfg.output_dir, "report.md")
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"\n  Report saved to {report_path}")
 
 
 # ── Evaluation ──────────────────────────────────────────────────────────────
@@ -82,7 +345,6 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
                                 labels=[0, 1], zero_division=0))
 
     # Investment metrics
-    print("── Investment Metrics ──────────────────────────────────────")
     ew_label = f"{int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)}"
     strategies = {
         "Model Portfolio": bt["port_return"],
@@ -94,19 +356,113 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
 
     inv_results = []
     for name, rets in strategies.items():
-        m = _investment_metrics(rets, name)
-        inv_results.append(m)
-        print(f"\n  {name}:")
-        print(f"    CAGR:         {m['cagr']:.2%}")
-        print(f"    Volatility:   {m['volatility']:.2%}")
-        print(f"    Sharpe:       {m['sharpe']:.2f}")
-        print(f"    Max Drawdown: {m['max_drawdown']:.2%}")
-        print(f"    Hit Rate:     {m['hit_rate']:.2%}")
-
+        inv_results.append(_investment_metrics(rets, name))
     inv_df = pd.DataFrame(inv_results).set_index("label")
-    model_sharpe = inv_df.loc["Model Portfolio", "sharpe"]
-    print(f"\n  Sharpe improvement vs {ew_label}:  {model_sharpe - inv_df.loc[ew_label, 'sharpe']:+.2f}")
-    print(f"  Sharpe improvement vs equity: {model_sharpe - inv_df.loc['Equity Only', 'sharpe']:+.2f}")
+
+    # ── Performance comparison table ──
+    print("╔══════════════════════════════════════════════════════════════════════════════════════════╗")
+    print("║                              PERFORMANCE DASHBOARD                                     ║")
+    print("╚══════════════════════════════════════════════════════════════════════════════════════════╝")
+
+    strats = list(strategies.keys())
+    header = f"  {'':>22s} | {'Model':>10s} | {ew_label:>10s} | {'60/40':>10s} | {'Equity':>10s} | {'T-Bills':>10s}"
+    sep = "  " + "─" * len(header.strip())
+    print(header)
+    print(sep)
+
+    rows = [
+        ("CAGR",           "cagr",           ":.2%"),
+        ("Total Return",   "total_return",    ":.1%"),
+        ("Volatility",     "volatility",      ":.2%"),
+        ("Sharpe",         "sharpe",          ":.2f"),
+        ("Sortino",        "sortino",         ":.2f"),
+        ("Calmar",         "calmar",          ":.2f"),
+        ("Max Drawdown",   "max_drawdown",    ":.2%"),
+        ("Max DD Duration", "max_dd_duration", ":>3d mths"),
+        ("VaR (95%)",      "var_95",          ":.2%"),
+        ("CVaR (95%)",     "cvar_95",         ":.2%"),
+        ("Hit Rate",       "hit_rate",        ":.1%"),
+        ("Best Month",     "best_month",      ":.2%"),
+        ("Worst Month",    "worst_month",     ":.2%"),
+        ("Avg Up Month",   "avg_up_month",    ":.2%"),
+        ("Avg Down Month", "avg_down_month",  ":.2%"),
+        ("Up/Down Ratio",  "up_down_ratio",   ":.2f"),
+        ("Win Streak",     "win_streak",      ":>3d mths"),
+        ("Lose Streak",    "lose_streak",     ":>3d mths"),
+    ]
+
+    for row_label, key, fmt in rows:
+        vals = []
+        for s in strats:
+            v = inv_df.loc[s, key]
+            if fmt.endswith("mths"):
+                cell = f"{int(v):>3d} mths"
+            else:
+                cell = format(v, fmt.lstrip(":"))
+            vals.append(f"{cell:>10s}")
+        print(f"  {row_label:>22s} | {' | '.join(vals)}")
+
+    print(sep)
+    n_months = inv_df.loc["Model Portfolio", "n_months"]
+    n_years = n_months / 12
+    print(f"  Period: {bt.index[0].strftime('%Y-%m')} to {bt.index[-1].strftime('%Y-%m')} ({int(n_months)} months / {n_years:.1f} years)")
+
+    model_m = inv_df.loc["Model Portfolio"]
+    equity_m = inv_df.loc["Equity Only"]
+    print(f"\n  ── Model vs Equity Only ──")
+    print(f"  CAGR gap:          {model_m['cagr'] - equity_m['cagr']:+.2%}  ({'trailing' if model_m['cagr'] < equity_m['cagr'] else 'leading'})")
+    print(f"  Drawdown saved:    {model_m['max_drawdown'] - equity_m['max_drawdown']:+.2%}")
+    print(f"  Sharpe improvement: {model_m['sharpe'] - equity_m['sharpe']:+.2f}")
+    print(f"  Sortino improvement: {model_m['sortino'] - equity_m['sortino']:+.2f}")
+    print(f"  Vol reduction:     {model_m['volatility'] - equity_m['volatility']:+.2%}")
+
+    print(f"\n  ── Model vs {ew_label} ──")
+    ew_m = inv_df.loc[ew_label]
+    print(f"  CAGR gap:          {model_m['cagr'] - ew_m['cagr']:+.2%}")
+    print(f"  Drawdown saved:    {model_m['max_drawdown'] - ew_m['max_drawdown']:+.2%}")
+    print(f"  Sharpe improvement: {model_m['sharpe'] - ew_m['sharpe']:+.2f}")
+
+    # ── Yearly returns table ──
+    print(f"\n╔══════════════════════════════════════════════════════════════════════════════════════════╗")
+    print(f"║                                ANNUAL RETURNS                                          ║")
+    print(f"╚══════════════════════════════════════════════════════════════════════════════════════════╝")
+
+    bt_annual = bt.copy()
+    bt_annual["year"] = bt_annual.index.year
+    years = sorted(bt_annual["year"].unique())
+
+    yr_header = f"  {'Year':>6s} | {'Model':>10s} | {ew_label:>10s} | {'60/40':>10s} | {'Equity':>10s} | {'T-Bills':>10s} | {'Model DD':>10s}"
+    print(yr_header)
+    print("  " + "─" * len(yr_header.strip()))
+
+    for year in years:
+        mask = bt_annual["year"] == year
+        yr_rets = {}
+        for col, label in [("port_return", "Model"), ("ew_return", ew_label),
+                           ("ret_6040", "60/40"), ("ret_equity", "Equity"), ("ret_tbills", "T-Bills")]:
+            yr_rets[label] = (1 + bt_annual.loc[mask, col]).prod() - 1
+
+        # Worst drawdown that year for model
+        cum_yr = (1 + bt_annual.loc[mask, "port_return"]).cumprod()
+        yr_dd = (cum_yr / cum_yr.cummax() - 1).min()
+
+        vals = [f"{yr_rets[s]:>+10.1%}" for s in ["Model", ew_label, "60/40", "Equity", "T-Bills"]]
+        print(f"  {year:>6d} | {' | '.join(vals)} | {yr_dd:>+10.1%}")
+
+    # Print totals
+    total_rets = {}
+    for col, label in [("port_return", "Model"), ("ew_return", ew_label),
+                       ("ret_6040", "60/40"), ("ret_equity", "Equity"), ("ret_tbills", "T-Bills")]:
+        total_rets[label] = (1 + bt[col]).prod() - 1
+    vals = [f"{total_rets[s]:>+10.1%}" for s in ["Model", ew_label, "60/40", "Equity", "T-Bills"]]
+    print("  " + "─" * len(yr_header.strip()))
+    print(f"  {'TOTAL':>6s} | {' | '.join(vals)} |")
+
+    # Count years model beat equity
+    model_wins = sum(1 for y in years
+                     if ((1 + bt_annual.loc[bt_annual["year"] == y, "port_return"]).prod() - 1) >
+                        ((1 + bt_annual.loc[bt_annual["year"] == y, "ret_equity"]).prod() - 1))
+    print(f"\n  Model beat equity in {model_wins}/{len(years)} years ({model_wins/len(years):.0%})")
 
     # Weight distribution
     eq_w = bt["weight_equity"]
@@ -146,6 +502,37 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
     # Save summary
     os.makedirs(cfg.output_dir, exist_ok=True)
     inv_df.to_csv(os.path.join(cfg.output_dir, "investment_metrics.csv"))
+
+    # Build annual returns data for the report
+    bt_annual = bt.copy()
+    bt_annual["year"] = bt_annual.index.year
+    years = sorted(bt_annual["year"].unique())
+    annual_data = []
+    for year in years:
+        mask = bt_annual["year"] == year
+        row = {"year": year}
+        for col, label in [("port_return", "Model"), ("ew_return", ew_label),
+                           ("ret_6040", "60/40"), ("ret_equity", "Equity"), ("ret_tbills", "T-Bills")]:
+            row[label] = (1 + bt_annual.loc[mask, col]).prod() - 1
+        cum_yr = (1 + bt_annual.loc[mask, "port_return"]).cumprod()
+        row["Model DD"] = (cum_yr / cum_yr.cummax() - 1).min()
+        annual_data.append(row)
+
+    # Crash overlay data
+    overlay_stats = {}
+    if "overlay" in bt.columns:
+        active = bt["overlay"] != "none"
+        overlay_stats["months_fired"] = int(active.sum())
+        overlay_stats["total_months"] = len(bt)
+        if active.sum() > 0:
+            overlay_stats["avg_eq_weight_active"] = bt.loc[active, "weight_equity"].mean()
+            overlay_stats["avg_eq_weight_off"] = bt.loc[~active, "weight_equity"].mean()
+            overlay_stats["avg_ret_active"] = bt.loc[active, "port_return"].mean()
+            overlay_stats["avg_eq_ret_active"] = bt.loc[active, "ret_equity"].mean()
+
+    _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
+                 correct.mean(), weighted_acc, upside_capture, downside_capture,
+                 acc, bal_acc, cm_df, ew_label)
 
     return {"classification": {"confusion_matrix": cm_df},
             "investment": inv_df, "coefficients": coefs}

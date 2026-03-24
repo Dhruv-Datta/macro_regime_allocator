@@ -41,11 +41,11 @@ min_train_months: 36         # minimum months of data before first prediction
 
 # ── Allocation ────────────────────────────────────────────────────────
 # Baseline weights when model is neutral (P = 0.50)
-baseline_equity: 0.75        # 75% equity at neutral — model must see danger to go defensive
-baseline_tbills: 0.25
+baseline_equity: 0.95        # 75% equity at neutral — model must see danger to go defensive
+baseline_tbills: 0.05
 
-min_weight: 0.05             # floor per asset (5% minimum in each)
-max_weight: 0.95             # cap per asset (95% maximum in each)
+min_weight: 0.03             # floor per asset (5% minimum in each)
+max_weight: 0.97             # cap per asset (95% maximum in each)
 
 # Sigmoid steepness: how aggressively probabilities map to weight swings
 # Higher = sharper transitions between equity-heavy and defensive
@@ -60,7 +60,6 @@ weight_smoothing_down: 1.0   # 1.0 = instant defense, no delay
 
 # ── Crash Overlay ─────────────────────────────────────────────────────
 # Real-time defensive triggers using current (unlagged) market data
-# These fire BEFORE the model catches up — the fast defense mechanism
 crash_overlay: true
 
 # VIX spike: how much VIX must jump in 1 month to trigger (higher = fewer triggers)
