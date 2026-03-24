@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Macro Regime Allocator — Equities vs Safe Rate
+Macro Regime Allocator — Equities vs T-Bills
 
 Predicts whether equities will outperform the risk-free rate (fed funds)
 over the next N months. Converts prediction into equity/cash weights.
@@ -16,16 +16,11 @@ import sys
 import os
 import warnings
 import pandas as pd
-import numpy as np
 
 from config import Config
-from data_loader import load_data
-from feature_engineering import engineer_features
-from label_builder import build_labels
-from backtest import run_backtest
-from evaluation import evaluate
-from plots import generate_all_plots
-from allocation import probabilities_to_weights
+from data import load_data, engineer_features, build_labels
+from backtest import run_backtest, probabilities_to_weights
+from results import evaluate, generate_all_plots
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -35,7 +30,7 @@ def parse_args():
     parser.add_argument("--window", choices=["expanding", "rolling"], default=None)
     parser.add_argument("--model", choices=["logistic", "incremental"], default=None)
     parser.add_argument("--horizon", type=int, default=None,
-                        help="Forecast horizon in months (default: 3)")
+                        help="Forecast horizon in months (default: 1)")
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--predict-latest", action="store_true")
     return parser.parse_args()
@@ -53,10 +48,10 @@ def main():
         cfg.forecast_horizon_months = args.horizon
 
     print("=" * 60)
-    print("  MACRO REGIME ALLOCATOR — Equities vs Safe Rate")
+    print("  MACRO REGIME ALLOCATOR — Equities vs T-Bills")
     print("=" * 60)
     print(f"  Equity proxy:  {cfg.asset_tickers['equity']}")
-    print(f"  Safe rate:     fed funds rate")
+    print(f"  T-Bills:       fed funds rate")
     print(f"  Horizon:       {cfg.forecast_horizon_months} months")
     print(f"  Window:        {cfg.window_type}")
     print(f"  Model:         {cfg.model_type}")
@@ -106,21 +101,13 @@ def main():
             raise ValueError(f"Latest features missing: {missing}")
 
         proba = final_model.predict_proba(latest_features)[0]
-        raw, weights, _ = probabilities_to_weights(proba, cfg)
+        _, weights, _ = probabilities_to_weights(proba, cfg)
 
         print(f"  As of: {latest_date.strftime('%Y-%m')}")
-        print(f"  P(equity beats safe rate): {proba[0]:.3f}")
+        print(f"  P(equity beats T-bills): {proba[0]:.3f}")
         print(f"  Final weights:")
         for i, name in enumerate(cfg.asset_classes):
             print(f"    {name:>10s}: {weights[i]:.1%}")
-
-        latest_df = pd.DataFrame({
-            "asset": cfg.asset_classes,
-            "probability": proba,
-            "weight": weights,
-        })
-        latest_df.to_csv(os.path.join(cfg.output_dir, "latest_weights.csv"),
-                         index=False)
 
     print("\n" + "=" * 60)
     print("  DONE")

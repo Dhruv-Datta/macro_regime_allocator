@@ -1,32 +1,46 @@
 """
 Configuration for the macro regime allocation system.
-Two assets: equities and safe rate (risk-free short-term bonds).
+Two assets: equities and T-bills (fed funds rate proxy).
+
+Loads user-facing settings from config.yaml, with Python defaults as fallback.
 """
 
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import yaml
+
+
+def _load_yaml() -> dict:
+    """Load config.yaml from the same directory as this file."""
+    yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if os.path.exists(yaml_path):
+        with open(yaml_path) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+_Y = _load_yaml()
+
 
 @dataclass
 class Config:
     # ── Date range ──────────────────────────────────────────────────────
-    start_date: str = "2000-01-01"
-    end_date: str = "2026-03-01"
+    start_date: str = _Y.get("start_date", "2000-01-01")
+    end_date: str = _Y.get("end_date", "2026-03-01")
 
     # ── Asset proxies ───────────────────────────────────────────────────
-    equity_ticker: str = "SPY"
+    equity_ticker: str = _Y.get("equity_ticker", "SPY")
 
     asset_tickers: Dict[str, str] = field(default_factory=lambda: {
-        "equity": "SPY",
+        "equity": _Y.get("equity_ticker", "SPY"),
     })
 
-    # VIX data for crash detection
     vix_ticker: str = "^VIX"
-    vix3m_ticker: str = "^VIX3M"      # 3-month VIX for term structure
+    vix3m_ticker: str = "^VIX3M"
 
-    # The "safe" return is the fed funds rate (risk-free short-term rate).
-    safe_rate_series: str = "fed_funds"
+    tbills_rate_series: str = "fed_funds"
 
     # ── FRED series IDs ─────────────────────────────────────────────────
     fred_series: Dict[str, str] = field(default_factory=lambda: {
@@ -40,8 +54,6 @@ class Config:
         "industrial_prod":  "INDPRO",
     })
 
-    # Series that get revised after initial release (CPI, unemployment, etc.)
-    # These use ALFRED first-release data to avoid lookahead from revisions
     fred_revisable_series: List[str] = field(default_factory=lambda: [
         "cpi", "core_cpi", "unemployment", "industrial_prod",
     ])
@@ -51,56 +63,51 @@ class Config:
     )
 
     # ── Forecast & rebalance ────────────────────────────────────────────
-    forecast_horizon_months: int = 1
+    forecast_horizon_months: int = _Y.get("forecast_horizon_months", 1)
     rebalance_frequency: str = "M"
 
     # ── Feature engineering ─────────────────────────────────────────────
-    macro_lag_months: int = 1
+    macro_lag_months: int = _Y.get("macro_lag_months", 1)
     zscore_window: int = 60
-    momentum_window: int = 3
-    volatility_window: int = 3
+    momentum_window: int = _Y.get("momentum_window", 3)
+    volatility_window: int = _Y.get("volatility_window", 3)
 
     # ── Model ───────────────────────────────────────────────────────────
-    # "logistic"     = retrain from scratch each step (LogisticRegression)
-    # "incremental"  = online updates via SGDClassifier with partial_fit
-    model_type: str = "logistic"
-    regularization_C: float = 0.5
-    sgd_alpha: float = 0.005
-    class_weight: Optional[str] = "balanced"
-    max_iter: int = 1000
+    model_type: str = _Y.get("model_type", "logistic")
+    regularization_C: float = _Y.get("regularization_C", 0.5)
+    sgd_alpha: float = _Y.get("sgd_alpha", 0.005)
+    class_weight: Optional[str] = _Y.get("class_weight", "balanced")
+    max_iter: int = _Y.get("max_iter", 1000)
 
     # Incremental learning settings
     incremental_warmstart: bool = True
-    recency_halflife_months: int = 18
-    checkpoint_every: int = 12
+    recency_halflife_months: int = _Y.get("recency_halflife_months", 18)
+    checkpoint_every: int = _Y.get("checkpoint_every", 12)
 
     # ── Backtest ────────────────────────────────────────────────────────
-    window_type: str = "expanding"
-    rolling_window_months: int = 120
-    min_train_months: int = 36
+    window_type: str = _Y.get("window_type", "expanding")
+    rolling_window_months: int = _Y.get("rolling_window_months", 120)
+    min_train_months: int = _Y.get("min_train_months", 36)
 
     # ── Allocation ──────────────────────────────────────────────────────
-    # Baseline: 75/25 equity/safe — equities win most of the time,
-    # the model's job is to identify the exceptions
-    min_weight: float = 0.05             # per-asset floor (allows 95% equity)
-    max_weight: float = 0.95             # per-asset cap
+    min_weight: float = _Y.get("min_weight", 0.05)
+    max_weight: float = _Y.get("max_weight", 0.95)
     confidence_blend: bool = True
-    equal_weight: List[float] = field(default_factory=lambda: [0.75, 0.25])
+    equal_weight: List[float] = field(default_factory=lambda: [
+        _Y.get("baseline_equity", 0.75),
+        _Y.get("baseline_tbills", 0.25),
+    ])
 
-    # Aggressive sigmoid: amplifies model probability into bigger weight swings
-    allocation_steepness: float = 10.0   # higher = sharper transitions
+    allocation_steepness: float = _Y.get("allocation_steepness", 10.0)
 
-    # Asymmetric weight smoothing: reduces turnover in bull markets
-    # while allowing fast defensive moves
-    weight_smoothing_up: float = 0.7     # α when increasing equity (moderate ramp, reduces churn)
-    weight_smoothing_down: float = 1.0   # α when decreasing equity (instant defense, no smoothing)
+    weight_smoothing_up: float = _Y.get("weight_smoothing_up", 0.7)
+    weight_smoothing_down: float = _Y.get("weight_smoothing_down", 1.0)
 
-    # Crash-detection overlay: uses current (unlagged) observable market data
-    # to force rapid defensive positioning when danger signals fire
-    crash_overlay: bool = True
-    vix_spike_threshold: float = 10.0    # VIX 1m change above this = danger (tighter = fewer false positives)
-    drawdown_defense_threshold: float = -15.0 # equity drawdown % triggers defense (deeper threshold)
-    credit_spike_threshold: float = 1.5  # credit spread 3m widening = danger
+    # Crash overlay
+    crash_overlay: bool = _Y.get("crash_overlay", True)
+    vix_spike_threshold: float = _Y.get("vix_spike_threshold", 10.0)
+    drawdown_defense_threshold: float = _Y.get("drawdown_defense_threshold", -15.0)
+    credit_spike_threshold: float = _Y.get("credit_spike_threshold", 1.5)
 
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"
@@ -111,8 +118,8 @@ class Config:
 
     # ── Asset class names (order matters) ───────────────────────────────
     asset_classes: List[str] = field(
-        default_factory=lambda: ["equity", "safe"]
+        default_factory=lambda: ["equity", "tbills"]
     )
     class_labels: Dict[int, str] = field(
-        default_factory=lambda: {0: "equity", 1: "safe"}
+        default_factory=lambda: {0: "equity", 1: "tbills"}
     )

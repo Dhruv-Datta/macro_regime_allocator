@@ -23,7 +23,7 @@ rerun-predict:
 
 # Install dependencies
 install:
-	uv pip install -r requirements.txt
+	uv sync
 
 # Remove generated outputs
 clean:
