@@ -51,7 +51,7 @@ class Config:
     )
 
     # ── Forecast & rebalance ────────────────────────────────────────────
-    forecast_horizon_months: int = 3
+    forecast_horizon_months: int = 1
     rebalance_frequency: str = "M"
 
     # ── Feature engineering ─────────────────────────────────────────────
@@ -71,7 +71,7 @@ class Config:
 
     # Incremental learning settings
     incremental_warmstart: bool = True
-    recency_halflife_months: int = 36
+    recency_halflife_months: int = 18
     checkpoint_every: int = 12
 
     # ── Backtest ────────────────────────────────────────────────────────
@@ -80,21 +80,27 @@ class Config:
     min_train_months: int = 36
 
     # ── Allocation ──────────────────────────────────────────────────────
-    # Baseline: 60/40 equity/safe
+    # Baseline: 75/25 equity/safe — equities win most of the time,
+    # the model's job is to identify the exceptions
     min_weight: float = 0.05             # per-asset floor (allows 95% equity)
     max_weight: float = 0.95             # per-asset cap
     confidence_blend: bool = True
-    equal_weight: List[float] = field(default_factory=lambda: [0.60, 0.40])
+    equal_weight: List[float] = field(default_factory=lambda: [0.75, 0.25])
 
     # Aggressive sigmoid: amplifies model probability into bigger weight swings
     allocation_steepness: float = 10.0   # higher = sharper transitions
 
+    # Asymmetric weight smoothing: reduces turnover in bull markets
+    # while allowing fast defensive moves
+    weight_smoothing_up: float = 0.7     # α when increasing equity (moderate ramp, reduces churn)
+    weight_smoothing_down: float = 1.0   # α when decreasing equity (instant defense, no smoothing)
+
     # Crash-detection overlay: uses current (unlagged) observable market data
     # to force rapid defensive positioning when danger signals fire
     crash_overlay: bool = True
-    vix_spike_threshold: float = 8.0     # VIX 1m change above this = danger
-    drawdown_defense_threshold: float = -12.0 # equity drawdown % triggers defense
-    credit_spike_threshold: float = 1.0  # credit spread 3m widening = danger
+    vix_spike_threshold: float = 10.0    # VIX 1m change above this = danger (tighter = fewer false positives)
+    drawdown_defense_threshold: float = -15.0 # equity drawdown % triggers defense (deeper threshold)
+    credit_spike_threshold: float = 1.5  # credit spread 3m widening = danger
 
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"

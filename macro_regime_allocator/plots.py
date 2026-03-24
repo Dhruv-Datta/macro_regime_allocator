@@ -20,7 +20,9 @@ def plot_cumulative_returns(bt: pd.DataFrame, cfg: Config):
     ew_label = _benchmark_label(cfg)
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(bt.index, bt["cum_port"], label="Model Portfolio", linewidth=2)
-    ax.plot(bt.index, bt["cum_ew"], label=ew_label, linewidth=1.5, alpha=0.8)
+    ax.plot(bt.index, bt["cum_ew"], label=ew_label, linewidth=1.5, linestyle="--", alpha=0.8)
+    ax.plot(bt.index, bt["cum_6040"], label="60/40 Reference",
+            linewidth=1.5, linestyle="-.", alpha=0.7, color="purple")
     ax.plot(bt.index, bt["cum_equity"], label="Equity Only (SPY)",
             linewidth=1, linestyle="--", alpha=0.6)
     ax.plot(bt.index, bt["cum_safe"], label="Safe Rate Only",
@@ -41,10 +43,11 @@ def plot_drawdowns(bt: pd.DataFrame, cfg: Config):
 
     ew_label = _benchmark_label(cfg)
     for col, label in [("port_return", "Model"), ("ew_return", ew_label),
+                        ("ret_6040", "60/40 Reference"),
                         ("ret_equity", "Equity Only (SPY)")]:
         cum = (1 + bt[col]).cumprod()
         dd = cum / cum.cummax() - 1
-        ax.fill_between(bt.index, dd, 0, alpha=0.3, label=label)
+        ax.fill_between(bt.index, dd, 0, alpha=0.25, label=label)
 
     ax.set_title("Drawdowns")
     ax.set_ylabel("Drawdown")
@@ -106,6 +109,7 @@ def plot_rolling_sharpe(bt: pd.DataFrame, cfg: Config, window: int = 24):
 
     ew_label = _benchmark_label(cfg)
     for col, label in [("port_return", "Model"), ("ew_return", ew_label),
+                        ("ret_6040", "60/40 Reference"),
                         ("ret_equity", "Equity Only (SPY)")]:
         rolling_mean = bt[col].rolling(window).mean() * 12
         rolling_std = bt[col].rolling(window).std() * np.sqrt(12)

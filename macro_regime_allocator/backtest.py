@@ -85,6 +85,7 @@ def run_backtest(
 
     results = []
     n_predicted = 0
+    prev_equity_weight = cfg.equal_weight[0]  # start at baseline
 
     for i in range(cfg.min_train_months, len(all_dates) - 1):
         rebalance_date = all_dates[i]
@@ -192,6 +193,19 @@ def run_backtest(
             proba, cfg, market_data=market_data
         )
 
+        # Asymmetric weight smoothing: slow ramp up, fast defense
+        target_equity = weights[0]
+        if target_equity >= prev_equity_weight:
+            # Increasing equity: smooth (slow ramp avoids churn in bulls)
+            alpha = cfg.weight_smoothing_up
+        else:
+            # Decreasing equity: respond fast (quick defensive switch)
+            alpha = cfg.weight_smoothing_down
+        smoothed_equity = alpha * target_equity + (1 - alpha) * prev_equity_weight
+        smoothed_equity = np.clip(smoothed_equity, cfg.min_weight, cfg.max_weight)
+        weights = np.array([smoothed_equity, 1.0 - smoothed_equity])
+        prev_equity_weight = smoothed_equity
+
         # 1-month realized returns
         if next_date not in monthly_returns.index:
             continue
@@ -206,6 +220,8 @@ def run_backtest(
         ew = get_equal_weights(cfg)
         ew_ret = np.dot(ew, realized)
 
+        # 60/40 reference line (not used in training, just for charting)
+        ret_6040 = 0.60 * ret_eq + 0.40 * ret_safe
 
         actual_label = y.loc[rebalance_date] if rebalance_date in y.index else np.nan
 
@@ -223,6 +239,7 @@ def run_backtest(
             "ret_safe": ret_safe,
             "port_return": port_ret,
             "ew_return": ew_ret,
+            "ret_6040": ret_6040,
             "holding_period_months": 1,
             "train_size": train_end,
         })
@@ -241,6 +258,7 @@ def run_backtest(
     bt["cum_ew"] = (1 + bt["ew_return"]).cumprod()
     bt["cum_equity"] = (1 + bt["ret_equity"]).cumprod()
     bt["cum_safe"] = (1 + bt["ret_safe"]).cumprod()
+    bt["cum_6040"] = (1 + bt["ret_6040"]).cumprod()
 
     weight_cols = ["weight_equity", "weight_safe"]
     turnover = bt[weight_cols].diff().abs().sum(axis=1)

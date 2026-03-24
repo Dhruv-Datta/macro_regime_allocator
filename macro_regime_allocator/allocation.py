@@ -20,15 +20,15 @@ def sigmoid_weight_map(p_equity: float, cfg: Config) -> float:
     """
     Map P(equity outperforms) through a steep sigmoid centered at 0.5.
 
-    With steepness=10:
+    With steepness=10, baseline=60/40:
+      P=0.50 → weight≈0.60   (neutral → standard 60/40)
       P=0.55 → weight≈0.73   (modest confidence → meaningful tilt)
       P=0.60 → weight≈0.82   (moderate confidence → strong tilt)
-      P=0.65 → weight≈0.88   (high confidence → aggressive)
-      P=0.40 → weight≈0.27   (model says safe → big defensive move)
-      P=0.35 → weight≈0.18
+      P=0.40 → weight≈0.37   (model says safe → big defensive move)
+      P=0.35 → weight≈0.25   (strong safe signal → go defensive fast)
 
     The equity-biased baseline shifts the center so neutral (P=0.5)
-    maps to ~70% equity instead of 50%.
+    maps to ~60% equity instead of 50%.
     """
     steepness = cfg.allocation_steepness
 
@@ -65,34 +65,33 @@ def crash_overlay(
     vix_ts = market_data.get("vix_term_structure")
 
     # 1. VIX spike: sharp jump = crash unfolding RIGHT NOW
-    #    This is where the 1-month model lag hurts most
+    #    Higher threshold = fewer false positives during normal vol
     if vix_change is not None and vix_change > cfg.vix_spike_threshold:
-        severity = min((vix_change - cfg.vix_spike_threshold) / 12.0, 1.0)
-        penalties.append(("vix_spike", severity * 0.40))
+        severity = min((vix_change - cfg.vix_spike_threshold) / 15.0, 1.0)
+        penalties.append(("vix_spike", severity * 0.50))
 
     # 2. VIX backwardation + rising VIX = full panic mode
-    #    Only fires when BOTH conditions are met (eliminates false positives
-    #    from mild, persistent backwardation during calm markets)
-    if (vix_ts is not None and vix_ts > 1.05
-            and vix_change is not None and vix_change > 2.0):
-        severity = min((vix_ts - 1.05) * 4.0, 1.0)
-        penalties.append(("vix_panic", severity * 0.30))
+    #    Tighter conditions: need stronger backwardation AND bigger VIX move
+    if (vix_ts is not None and vix_ts > 1.08
+            and vix_change is not None and vix_change > 3.0):
+        severity = min((vix_ts - 1.08) * 5.0, 1.0)
+        penalties.append(("vix_panic", severity * 0.35))
 
     # 3. Drawdown accelerating: deep drawdown getting worse this month
     #    Only when combined with VIX stress (avoids staying defensive in
-    #    grinding sideways markets)
+    #    grinding sideways markets). Deeper threshold = fewer false positives.
     drawdown = market_data.get("equity_drawdown_from_high")
     dd_change = market_data.get("drawdown_1m_change")
     if (drawdown is not None and drawdown < cfg.drawdown_defense_threshold
-            and dd_change is not None and dd_change < -3.0
-            and vix_ts is not None and vix_ts > 0.95):
+            and dd_change is not None and dd_change < -4.0
+            and vix_ts is not None and vix_ts > 0.98):
         severity = min(-dd_change / 10.0, 1.0)
-        penalties.append(("drawdown_crash", severity * 0.25))
+        penalties.append(("drawdown_crash", severity * 0.30))
 
     if not penalties:
         return equity_weight, "none"
 
-    total_penalty = min(sum(p for _, p in penalties), 0.55)
+    total_penalty = min(sum(p for _, p in penalties), 0.60)
     adjusted = equity_weight * (1.0 - total_penalty)
 
     reasons = "+".join(name for name, _ in penalties)

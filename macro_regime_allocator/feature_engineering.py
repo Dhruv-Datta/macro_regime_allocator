@@ -53,6 +53,11 @@ def compute_rates_features(df: pd.DataFrame) -> pd.DataFrame:
             inflation = df[cpi_col].pct_change(12) * 100
             feats["real_fed_funds"] = df["fed_funds"] - inflation
 
+    # Yield curve slope: 10Y - 2Y (classic recession predictor)
+    # Inverted curve (negative) = recession ahead = get defensive
+    if "treasury_10y" in df.columns and "treasury_2y" in df.columns:
+        feats["yield_curve_slope"] = df["treasury_10y"] - df["treasury_2y"]
+
     return feats
 
 

@@ -159,6 +159,7 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
     strategies = {
         "Model Portfolio": bt["port_return"],
         ew_label: bt["ew_return"],
+        "60/40 Reference": bt["ret_6040"],
         "Equity Only": bt["ret_equity"],
         "Safe Rate Only": bt["ret_safe"],
     }
