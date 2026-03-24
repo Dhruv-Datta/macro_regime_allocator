@@ -1,14 +1,16 @@
-SHELL := /bin/bash
-.PHONY: app install clean
+.PHONY: install dev build clean prepare
 
-# Launch the Streamlit dashboard
-app:
-	uv run streamlit run app.py
-
-# Install frontend dependencies
 install:
-	uv sync
+	npm install
 
-# Clean cache
+prepare:
+	python3 scripts/prepare_data.py
+
+dev: prepare
+	npm run dev
+
+build: prepare
+	npm run build
+
 clean:
-	rm -rf __pycache__ .streamlit
+	rm -rf node_modules dist public/data
