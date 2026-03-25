@@ -52,7 +52,7 @@ allocation_steepness: 13.0
 # Near-instant re-entry (0.98). Slightly delayed defense (0.95)
 # requires signal confirmation — prevents whipsaws on single bad months.
 weight_smoothing_up: 0.98
-weight_smoothing_down: 0.95
+weight_smoothing_down: 0.97
 
 # -- Crash Overlay -----------------------------------------------------
 crash_overlay: true

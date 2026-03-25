@@ -407,8 +407,16 @@ def bootstrap_confidence(features: pd.DataFrame, labels: pd.DataFrame,
 def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
                           cfg: Config) -> pd.DataFrame:
     """
-    Track how model coefficients evolve over the walk-forward window.
-    Stable coefficients suggest the model is learning real signal, not noise.
+    Track how model coefficients evolve over the walk-forward window and
+    score each feature's instability using a composite metric:
+
+        instability = 0.5 * rank(change_std)
+                    + 0.3 * rank(max_abs_jump)
+                    + 0.2 * rank(spike_frequency)
+
+    where spike_frequency = fraction of |delta_t| > 2 * median(|delta|).
+
+    Scores are percentile ranks across features (0-1). Higher = more unstable.
     """
     from model import RegimeClassifier
     from backtest import _recency_weights, _class_balanced_weights
@@ -429,7 +437,7 @@ def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
 
     coef_records = []
 
-    # Match the backtest's actual refit cadence (every `horizon` months)
+    # Match the backtest's actual refit cadence
     sample_points = range(cfg.min_train_months, len(all_dates) - horizon, horizon)
 
     for i in sample_points:
@@ -456,18 +464,58 @@ def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
         coef_records.append(record)
 
     df = pd.DataFrame(coef_records)
-    if not df.empty:
-        df = df.set_index("date")
-        feature_cols = [c for c in df.columns if c != "train_size"]
-        print(f"\n  Tracked {len(df)} refit points across {len(feature_cols)} features")
-        print(f"  (refit every {horizon} month(s), matching backtest cadence)")
-        print(f"\n  Coefficient change volatility (lower = more stable):")
-        for col in feature_cols:
-            mean = df[col].mean()
-            cv = abs(df[col].std() / mean) if mean != 0 else float("inf")
-            changes = df[col].diff().dropna()
-            change_vol = changes.std()
-            print(f"    {col:>30s}: mean={mean:+.4f}, cv={cv:.2f}, change_vol={change_vol:.4f}")
+    if df.empty:
+        return df
+
+    df = df.set_index("date")
+    feature_cols = [c for c in df.columns if c != "train_size"]
+
+    print(f"\n  Tracked {len(df)} refit points across {len(feature_cols)} features")
+    print(f"  (refit every {horizon} month(s), matching backtest cadence)")
+
+    # ── Compute raw instability components per feature ──
+    raw = {}
+    for col in feature_cols:
+        changes = df[col].diff().dropna()
+        abs_changes = changes.abs()
+        change_std = changes.std()
+        max_abs_jump = abs_changes.max()
+        median_abs = abs_changes.median()
+        spike_freq = (abs_changes > 2 * median_abs).mean() if median_abs > 0 else 0.0
+        raw[col] = {
+            "change_std": change_std,
+            "max_abs_jump": max_abs_jump,
+            "spike_freq": spike_freq,
+        }
+
+    raw_df = pd.DataFrame(raw).T
+
+    # ── Percentile-rank each component across features ──
+    ranked = raw_df.rank(pct=True)
+
+    # ── Composite instability score ──
+    instability = (0.5 * ranked["change_std"]
+                   + 0.3 * ranked["max_abs_jump"]
+                   + 0.2 * ranked["spike_freq"])
+
+    # ── Print results ──
+    print(f"\n  {'Feature':>30s}  {'change_std':>10s}  {'max_jump':>9s}  {'spike_freq':>10s}  {'instability':>11s}")
+    print(f"  {'─' * 30}  {'─' * 10}  {'─' * 9}  {'─' * 10}  {'─' * 11}")
+
+    scores = {}
+    for col in feature_cols:
+        r = raw[col]
+        score = instability[col]
+        scores[col] = {
+            "change_std": r["change_std"],
+            "max_abs_jump": r["max_abs_jump"],
+            "spike_freq": r["spike_freq"],
+            "instability": score,
+        }
+        print(f"    {col:>30s}  {r['change_std']:10.4f}  {r['max_abs_jump']:9.4f}  "
+              f"{r['spike_freq']:10.2%}  {score:11.3f}")
+
+    df.attrs["instability_scores"] = scores
 
     return df
 
@@ -544,7 +592,13 @@ def _print_summary(results: dict):
     if len(sens_valid) > 0:
         pct_positive = (sens_valid["excess_calmar"] > 0).mean() * 100
         if pct_positive < 70:
-            warnings.append(f"Excess Calmar positive in only {pct_positive:.0f}% of parameter variants")
+            warnings.append(
+                f"Excess Calmar positive in only {pct_positive:.0f}% of parameter variants\n"
+                "        This could indicate the model's edge is fragile and depends on\n"
+                "        precise parameter tuning — a hallmark of overfitting to the in-sample\n"
+                "        period. However, it could also mean the strategy has a narrow but real\n"
+                "        sweet spot, or that some parameters (e.g., smoothing) interact\n"
+                "        nonlinearly and small changes push past a tipping point.")
         else:
             passes.append(f"Excess Calmar positive in {pct_positive:.0f}% of parameter variants")
 
@@ -556,7 +610,14 @@ def _print_summary(results: dict):
         if model_only.iloc[0]["excess_calmar"] > 0:
             passes.append(f"Model-only variant has positive excess Calmar ({model_only.iloc[0]['excess_calmar']:+.3f})")
         else:
-            warnings.append(f"Model-only variant has negative excess Calmar ({model_only.iloc[0]['excess_calmar']:+.3f}) — edge may come from overlay/smoothing")
+            warnings.append(
+                f"Model-only variant has negative excess Calmar ({model_only.iloc[0]['excess_calmar']:+.3f})\n"
+                "        This suggests the model's learned signal alone doesn't beat the static\n"
+                "        baseline — the edge may come from the crash overlay or smoothing\n"
+                "        heuristics rather than the regime classifier. However, this isn't\n"
+                "        necessarily bad: the model may still add value as one component in\n"
+                "        the full system, and the overlay/smoothing may capture real dynamics\n"
+                "        (e.g., momentum, mean reversion) that logistic regression can't.")
 
     # Check subperiod consistency (using excess Calmar = return-to-drawdown improvement)
     sub = results["subperiod"]
@@ -567,7 +628,14 @@ def _print_summary(results: dict):
             passes.append("Excess Calmar positive across all decades")
         else:
             neg_decades = decades[decades["excess_calmar"] <= 0]["name"].tolist()
-            warnings.append(f"Negative excess Calmar in: {', '.join(neg_decades)}")
+            warnings.append(
+                f"Negative excess Calmar in: {', '.join(neg_decades)}\n"
+                "        The strategy underperformed the static baseline on a risk-adjusted\n"
+                "        basis in some decades. This could mean the model is overfit to\n"
+                "        patterns in other periods. However, macro regimes genuinely differ\n"
+                "        across decades — a strategy tuned for crisis detection will naturally\n"
+                "        underperform in decades with no major crises (e.g., 2010s), since it\n"
+                "        pays the cost of defensiveness without the payoff.")
 
     # Check bootstrap
     boot = results["bootstrap"]
@@ -577,24 +645,40 @@ def _print_summary(results: dict):
         if not np.isnan(p5) and p5 > 0:
             passes.append(f"Sharpe 90% CI lower bound > 0 ({p5:.3f})")
         elif not np.isnan(p5):
-            warnings.append(f"Sharpe 90% CI includes zero (lower bound = {p5:.3f})")
+            warnings.append(
+                f"Sharpe 90% CI includes zero (lower bound = {p5:.3f})\n"
+                "        The strategy's Sharpe ratio is not statistically distinguishable from\n"
+                "        zero — the result could be explained by the specific sequence of\n"
+                "        months that occurred. This is a classic overfitting signal: the edge\n"
+                "        may come from a few lucky months rather than consistent alpha.\n"
+                "        However, block bootstrap with 12-month blocks may overstate\n"
+                "        uncertainty if the strategy's edge is regime-dependent (concentrated\n"
+                "        in crises), since resampling dilutes those rare but genuine events.")
 
-    # Check coefficient stability via change volatility relative to mean
+    # Check coefficient stability via instability score
     coefs = results["coefficients"]
     if not coefs.empty:
-        feature_cols = [c for c in coefs.columns if c != "train_size"]
-        unstable = []
-        for col in feature_cols:
-            mean = abs(coefs[col].mean())
-            change_vol = coefs[col].diff().dropna().std()
-            # A feature is unstable if its refit-to-refit change vol
-            # exceeds its mean magnitude (the noise dominates the signal)
-            if mean > 0 and change_vol / mean > 1.0:
-                unstable.append(col)
-        if unstable:
-            warnings.append(f"High coefficient instability in {len(unstable)}/{len(feature_cols)} features: {', '.join(unstable)}")
-        else:
-            passes.append(f"All {len(feature_cols)} feature coefficients are stable across refits")
+        scores = coefs.attrs.get("instability_scores", {})
+        if scores:
+            # Flag features with instability score > 0.75 (top quartile)
+            jumpy = [col for col, s in scores.items() if s["instability"] > 0.75]
+            if jumpy:
+                warnings.append(
+                    f"High coefficient instability (score>0.75) in: {', '.join(jumpy)}\n"
+                    "        These features have coefficients that jump significantly between\n"
+                    "        refits, which can indicate the model is fitting noise. However,\n"
+                    "        there are benign explanations:\n"
+                    "        - Real regime changes: a feature may genuinely matter more in some\n"
+                    "          macro environments (e.g., VIX features behave differently in\n"
+                    "          crises vs calm markets).\n"
+                    "        - Correlated predictors: if features are collinear, the model can\n"
+                    "          shift weight between them while predictions stay similar, making\n"
+                    "          individual coefficients look unstable.\n"
+                    "        - True nonstationarity: if the underlying economic relationship\n"
+                    "          changes over time, a moving coefficient is correct behavior,\n"
+                    "          not a flaw.")
+            else:
+                passes.append(f"All {len(scores)} feature coefficients have moderate instability scores")
 
     print("\n  PASSES:")
     for p in passes:
@@ -607,8 +691,8 @@ def _print_summary(results: dict):
     else:
         print("    None")
 
-    verdict = "ROBUST" if len(warnings) == 0 else (
-        "PARTIALLY ROBUST" if len(warnings) <= 2 else "FRAGILE"
+    verdict = "ROBUST" if len(warnings) <= 1 else (
+        "PARTIALLY ROBUST" if len(warnings) == 2 else "FRAGILE"
     )
     print(f"\n  VERDICT: {verdict}")
     print(f"    {len(passes)} passes, {len(warnings)} warnings")
@@ -677,14 +761,15 @@ def _save_validation_report(results: dict, output_dir: str):
     coefs = results["coefficients"]
     if not coefs.empty:
         feature_cols = [c for c in coefs.columns if c != "train_size"]
-        w("| Feature | Mean Coef | CV | Change Vol | Change Vol / Mean |")
-        w("| :--- | ---: | ---: | ---: | ---: |")
+        scores = coefs.attrs.get("instability_scores", {})
+        w("| Feature | Mean Coef | Change Std | Max Jump | Spike Freq | Instability |")
+        w("| :--- | ---: | ---: | ---: | ---: | ---: |")
         for col in feature_cols:
             mean = coefs[col].mean()
-            cv = abs(coefs[col].std() / mean) if mean != 0 else float("inf")
-            change_vol = coefs[col].diff().dropna().std()
-            ratio = change_vol / abs(mean) if mean != 0 else float("inf")
-            w(f"| {col} | {mean:+.4f} | {cv:.2f} | {change_vol:.4f} | {ratio:.2f} |")
+            s = scores.get(col, {})
+            w(f"| {col} | {mean:+.4f} | {s.get('change_std', 0):.4f} | "
+              f"{s.get('max_abs_jump', 0):.4f} | {s.get('spike_freq', 0):.2%} | "
+              f"{s.get('instability', 0):.3f} |")
 
     report_path = os.path.join(output_dir, "validation_report.md")
     with open(report_path, "w") as f:
