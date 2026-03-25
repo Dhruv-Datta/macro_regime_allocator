@@ -1,64 +1,53 @@
 # ======================================================================
 #              MACRO REGIME ALLOCATOR -- Configuration
-#  Change these values to control how the model trains & allocates.
 # ======================================================================
 
-# -- Date Range --------------------------------------------------------
-# How far back to train and how far forward to test
 start_date: "2000-01-01"
 end_date: "2026-03-01"
 
-# -- Assets ------------------------------------------------------------
-equity_ticker: "SPY"        # what we buy when bullish
-
-# -- Forecast ----------------------------------------------------------
-# How many months ahead the model predicts (1 = most responsive)
+equity_ticker: "SPY"
 forecast_horizon_months: 1
 
 # -- Feature Engineering -----------------------------------------------
-macro_lag_months: 1          # lag all features by N months (prevents lookahead)
-momentum_window: 3           # months for equity momentum calculation
-volatility_window: 3         # months for equity volatility calculation
+macro_lag_months: 1
+momentum_window: 3
+volatility_window: 3
 
 # -- Model -------------------------------------------------------------
-regularization_C: 0.5        # inverse regularization (higher = less regularization, more flexible)
-class_weight: "balanced"     # auto-balance for uneven equity/tbills label counts
-max_iter: 1000               # max solver iterations
+# C=0.5: moderate regularization. Prevents extreme probabilities that
+# cause the model to go fully defensive during recoveries. Keeps
+# predictions closer to baseline so the allocation favors staying invested.
+regularization_C: 0.5
+class_weight: "balanced"
+max_iter: 1000
 
 # -- Training ----------------------------------------------------------
-recency_halflife_months: 18  # recent data weighted more (lower = more responsive)
-window_type: "expanding"     # "expanding" = all history, "rolling" = fixed window
-rolling_window_months: 120   # only used when window_type = "rolling"
-min_train_months: 36         # minimum months of data before first prediction
+recency_halflife_months: 12
+window_type: "expanding"
+rolling_window_months: 120
+min_train_months: 48
 
 # -- Allocation --------------------------------------------------------
-# Baseline weights when model is neutral (P = 0.50)
-baseline_equity: 0.90        # 75% equity at neutral -- model must see danger to go defensive
-baseline_tbills: 0.10
+# 95% baseline: the equity premium is real and persistent. The model's
+# job is NOT to constantly adjust — it's to DEFEND during the rare
+# months that matter. Stay invested, cut hard when danger appears.
+baseline_equity: 0.95
+baseline_tbills: 0.05
 
-min_weight: 0.03             # floor per asset (5% minimum in each)
-max_weight: 0.97             # cap per asset (95% maximum in each)
+min_weight: 0.10
+max_weight: 0.97
 
-# Sigmoid steepness: how aggressively probabilities map to weight swings
-# Higher = sharper transitions between equity-heavy and defensive
-allocation_steepness: 10.0
+# Steepness 13: moderately decisive. Enough to get defensive during
+# genuine crises but avoids hemorrhaging returns in uncertain months.
+allocation_steepness: 13.0
 
-# Asymmetric weight smoothing
-# Controls how fast weights change month-to-month
-# up = when adding equity (lower = smoother ramp, less churn in bulls)
-# down = when cutting equity (higher = faster defense)
-weight_smoothing_up: 0.7     # 0.0 = no change, 1.0 = instant
-weight_smoothing_down: 1.0   # 1.0 = instant defense, no delay
+# Near-instant re-entry (0.98). Slightly delayed defense (0.95)
+# requires signal confirmation — prevents whipsaws on single bad months.
+weight_smoothing_up: 0.98
+weight_smoothing_down: 0.95
 
 # -- Crash Overlay -----------------------------------------------------
-# Real-time defensive triggers using current (unlagged) market data
 crash_overlay: true
-
-# VIX spike: how much VIX must jump in 1 month to trigger (higher = fewer triggers)
-vix_spike_threshold: 10.0
-
-# Drawdown defense: how deep the drawdown from 12m high must be (more negative = fewer triggers)
-drawdown_defense_threshold: -15.0
-
-# Credit spread widening: 3-month change threshold (higher = fewer triggers)
+vix_spike_threshold: 7.0
+drawdown_defense_threshold: -10.0
 credit_spike_threshold: 1.5

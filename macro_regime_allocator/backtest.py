@@ -60,7 +60,7 @@ def crash_overlay(equity_weight: float, market_data: dict, cfg: Config) -> tuple
     if not penalties:
         return equity_weight, "none"
 
-    total_penalty = min(sum(p for _, p in penalties), 0.60)
+    total_penalty = min(sum(p for _, p in penalties), 0.50)
     reasons = "+".join(name for name, _ in penalties)
     return equity_weight * (1.0 - total_penalty), reasons
 

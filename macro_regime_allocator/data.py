@@ -118,7 +118,14 @@ def load_data(cfg: Config) -> pd.DataFrame:
 # ── Feature Engineering ─────────────────────────────────────────────────────
 
 def engineer_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    """Build the full feature matrix. All features lagged by macro_lag_months."""
+    """Build the full feature matrix. All features lagged by macro_lag_months.
+
+    The uniform 1-month lag serves two purposes:
+      - Macro series (CPI, unemployment) aren't published until weeks later.
+      - Market series (VIX, equity) at t-1 are PREDICTIVE of t+1 outcomes
+        (momentum persistence, volatility clustering), whereas t=0 values
+        describe damage that already happened this month.
+    """
     print("Engineering features...")
     feats = pd.DataFrame(index=df.index)
 
@@ -162,7 +169,7 @@ def engineer_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
         rolling_high = df["equity"].rolling(12).max()
         feats["equity_drawdown_from_high"] = (df["equity"] / rolling_high - 1) * 100
 
-    # Lag all features to prevent lookahead
+    # Lag all features
     feats = feats.shift(cfg.macro_lag_months).dropna(how="all")
 
     print(f"  Features ({len(feats.columns)}): {list(feats.columns)}")

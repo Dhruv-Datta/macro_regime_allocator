@@ -200,27 +200,27 @@ The model doesn't cherry-pick a weak benchmark. It's compared against the alloca
 
 **Survivorship bias is not applicable.** The system trades SPY (the S&P 500 ETF) and the fed funds rate. There's no stock selection, no sector rotation, no universe construction that could introduce survivorship bias.
 
-**Transaction costs are trivially small.** Average monthly turnover is 0.176 (17.6% of the portfolio changes hands per month). For SPY, round-trip transaction costs are <1 basis point. Even at 5bps per trade, annual drag would be ~10bps — a rounding error on 10.76% CAGR.
+**Transaction costs are trivially small.** Average monthly turnover is ~0.20 (20% of the portfolio changes hands per month). For SPY, round-trip transaction costs are <1 basis point. Even at 5bps per trade, annual drag would be ~12bps — a rounding error on 9.45% CAGR.
 
 ---
 
 ## Results
 
-Over the 21.2-year backtest period (Dec 2004 to Jan 2026, 254 months):
+Over the 24.8-year backtest period (May 2001 to Jan 2026, 297 months):
 
 | Metric | Model | Equity | 60/40 |
 |:---|---:|---:|---:|
-| CAGR | 10.76% | 10.60% | 7.29% |
-| Total Return | 770% | 744% | 343% |
-| Volatility | 10.77% | 14.78% | 8.87% |
-| Sharpe | 1.00 | 0.72 | 0.82 | 
-| Sortino | 1.56 | 0.97 | 1.11 |
-| Max Drawdown | -22.08% | -50.78% | -33.15% |
-| Max DD Duration | 20 mo | 52 mo | 41 mo | 
+| CAGR | 9.45% | 9.09% | 6.40% |
+| Total Return | 835% | 761% | 364% |
+| Volatility | 11.62% | 14.86% | 8.91% |
+| Sharpe | 0.81 | 0.61 | 0.72 |
+| Sortino | 1.19 | 0.84 | 0.98 |
+| Max Drawdown | -29.85% | -50.78% | -33.15% |
+| Max DD Duration | 40 mo | 52 mo | 41 mo |
 
-The key result is not the CAGR — it's the **drawdown reduction**. The model captures nearly all of the equity premium (10.76% vs 10.60%) while cutting the maximum drawdown by more than half (-22% vs -51%). The Sharpe ratio improves from 0.72 to 1.00, and the Sortino ratio (which specifically penalizes downside volatility) improves from 0.97 to 1.56.
+The key result is that the model **beats equity CAGR (+0.36%) while cutting drawdowns by 41%** (-29.85% vs -50.78%). The Sharpe ratio improves from 0.61 to 0.81, and the Sortino ratio (which specifically penalizes downside volatility) improves from 0.84 to 1.19.
 
-The model's strongest performance came in 2008 (-11.5% vs equity's -36.8%), 2009 (+36.1% vs equity's +26.4%), and 2022 (-14.1% vs equity's -18.2%). It tends to underperform in strong bull markets where going defensive has no payoff (2010, 2016, 2021).
+The model's strongest performance came in 2008 (-15.0% vs equity's -36.8%), 2009 (+35.2% vs equity's +26.4%), and 2022 (-14.2% vs equity's -18.2%). It tends to underperform in strong bull markets where going defensive has no payoff (2010, 2016, 2021).
 
 ---
 
