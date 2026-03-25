@@ -18,7 +18,9 @@ volatility_window: 3
 # cause the model to go fully defensive during recoveries. Keeps
 # predictions closer to baseline so the allocation favors staying invested.
 regularization_C: 0.5
-class_weight: "balanced"
+# Class balancing is handled via sample weights in the backtest loop
+# (recency * class-balanced). Setting class_weight here too would double-count.
+class_weight: null
 max_iter: 1000
 
 # -- Training ----------------------------------------------------------
@@ -26,6 +28,12 @@ recency_halflife_months: 12
 window_type: "expanding"
 rolling_window_months: 120
 min_train_months: 48
+
+# -- Holdout -----------------------------------------------------------
+# Set to a date like "2020-01-01" to create an untouched holdout period.
+# The validation suite will report in-sample vs holdout metrics separately.
+# Leave as null for normal operation (no holdout).
+holdout_start: "2020-01-01"
 
 # -- Allocation --------------------------------------------------------
 # 95% baseline: the equity premium is real and persistent. The model's

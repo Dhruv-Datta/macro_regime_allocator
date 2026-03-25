@@ -32,6 +32,8 @@ def parse_args():
                         help="Forecast horizon in months (default: 1)")
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--predict-latest", action="store_true")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run robustness validation suite")
     return parser.parse_args()
 
 
@@ -88,6 +90,12 @@ def main():
     # Step 6: Plots
     print("\n── Step 6: Generate Plots ────────────────────────────────")
     generate_all_plots(bt, eval_results, cfg)
+
+    # Robustness validation suite
+    if args.validate:
+        from validate import run_validation
+        print("\n── Step 7: Robustness Validation ─────────────────────────")
+        run_validation(features, labels, cfg)
 
     # Latest prediction
     if args.predict_latest:
