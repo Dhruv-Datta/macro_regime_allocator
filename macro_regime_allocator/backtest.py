@@ -60,7 +60,7 @@ def crash_overlay(equity_weight: float, market_data: dict, cfg: Config) -> tuple
     if not penalties:
         return equity_weight, "none"
 
-    total_penalty = min(sum(p for _, p in penalties), 0.60)
+    total_penalty = min(sum(p for _, p in penalties), 0.50)
     reasons = "+".join(name for name, _ in penalties)
     return equity_weight * (1.0 - total_penalty), reasons
 
@@ -179,9 +179,10 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     results = []
     prev_equity_weight = cfg.equal_weight[0]
 
-    for i in range(cfg.min_train_months, len(all_dates) - 1):
+    # Step size: for horizon > 1, skip forward by horizon months to avoid
+    # overlapping holding periods (each decision holds for `horizon` months).
+    for i in range(cfg.min_train_months, len(all_dates) - horizon, horizon):
         rebalance_date = all_dates[i]
-        next_date = all_dates[i + 1]
 
         # Only train on labels whose forward window is fully realized
         train_end = i - horizon
@@ -216,20 +217,34 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
         weights = np.array([smoothed_eq, 1.0 - smoothed_eq])
         prev_equity_weight = smoothed_eq
 
-        # ── Realized returns ────────────────────────────────────────────
-        if next_date not in monthly_returns.index:
-            continue
-        ret_eq = monthly_returns.loc[next_date, "equity"]
-        ret_tbills = monthly_returns.loc[next_date, "tbills"]
-        if np.isnan(ret_eq) or np.isnan(ret_tbills):
+        # ── Realized returns over the full holding period ──────────────
+        # Compound monthly returns for `horizon` months (or fewer at end)
+        holding_dates = all_dates[i + 1 : i + 1 + horizon]
+        cum_eq = 1.0
+        cum_tb = 1.0
+        valid_months = 0
+        for hd in holding_dates:
+            if hd not in monthly_returns.index:
+                break
+            ret_eq_m = monthly_returns.loc[hd, "equity"]
+            ret_tb_m = monthly_returns.loc[hd, "tbills"]
+            if np.isnan(ret_eq_m) or np.isnan(ret_tb_m):
+                break
+            cum_eq *= (1 + ret_eq_m)
+            cum_tb *= (1 + ret_tb_m)
+            valid_months += 1
+
+        if valid_months == 0:
             continue
 
+        ret_eq = cum_eq - 1
+        ret_tbills = cum_tb - 1
         realized = np.array([ret_eq, ret_tbills])
         actual_label = y.loc[rebalance_date] if rebalance_date in y.index else np.nan
 
         results.append({
             "rebalance_date": rebalance_date,
-            "return_date": next_date,
+            "return_date": holding_dates[valid_months - 1],
             "pred_class": pred_class,
             "actual_label": actual_label,
             "prob_equity": proba[0],
@@ -292,4 +307,5 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     final_model.fit(X.loc[common], y.loc[common], sample_weight=sw * cw)
     final_model.save_model()
 
-    return {"backtest": bt, "final_model": final_model}
+    return {"backtest": bt, "final_model": final_model,
+            "prev_equity_weight": prev_equity_weight}

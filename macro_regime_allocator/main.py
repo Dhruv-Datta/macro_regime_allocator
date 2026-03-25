@@ -19,7 +19,7 @@ import pandas as pd
 
 from config import Config
 from data import load_data, engineer_features, build_labels
-from backtest import run_backtest, probabilities_to_weights
+from backtest import run_backtest, probabilities_to_weights, _gather_market_data
 from results import evaluate, generate_all_plots
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -31,7 +31,10 @@ def parse_args():
     parser.add_argument("--horizon", type=int, default=None,
                         help="Forecast horizon in months (default: 1)")
     parser.add_argument("--skip-download", action="store_true")
-    parser.add_argument("--predict-latest", action="store_true")
+    parser.add_argument("--predict", action="store_true",
+                        help="Run only the live prediction using saved model and cached data")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run robustness validation suite")
     return parser.parse_args()
 
 
@@ -43,6 +46,70 @@ def main():
         cfg.window_type = args.window
     if args.horizon:
         cfg.forecast_horizon_months = args.horizon
+
+    # ── Fast predict mode: load saved model + cached data, run inference only ──
+    if args.predict:
+        import numpy as np
+        from model import RegimeClassifier
+        merged_path = os.path.join(cfg.data_dir, "merged_monthly.csv")
+        if not os.path.exists(merged_path):
+            print(f"ERROR: {merged_path} not found. Run a full backtest first.")
+            sys.exit(1)
+        if not os.path.exists(cfg.model_path):
+            print(f"ERROR: {cfg.model_path} not found. Run a full backtest first.")
+            sys.exit(1)
+
+        merged = pd.read_csv(merged_path, index_col="date", parse_dates=True)
+        features = engineer_features(merged, cfg)
+        model = RegimeClassifier(cfg)
+        model.load_model()
+
+        latest_date = features.index[-1]
+        latest_features = features.reindex(columns=model.feature_names).iloc[[-1]]
+        if latest_features.isna().any(axis=None):
+            missing = latest_features.columns[latest_features.isna().iloc[0]].tolist()
+            print(f"ERROR: Latest features missing: {missing}")
+            sys.exit(1)
+
+        proba = model.predict_proba(latest_features)[0]
+        market_data = _gather_market_data(merged, latest_date)
+        _, weights, overlay_reason = probabilities_to_weights(proba, cfg, market_data)
+
+        # Read last backtest weight for smoothing
+        bt_path = os.path.join(cfg.output_dir, "backtest_results.csv")
+        if os.path.exists(bt_path):
+            bt_saved = pd.read_csv(bt_path, index_col="date", parse_dates=True)
+            prev_eq = bt_saved["weight_equity"].dropna().iloc[-1]
+        else:
+            prev_eq = cfg.equal_weight[0]
+        target_eq = weights[0]
+        alpha = cfg.weight_smoothing_up if target_eq >= prev_eq else cfg.weight_smoothing_down
+        smoothed_eq = np.clip(alpha * target_eq + (1 - alpha) * prev_eq,
+                              cfg.min_weight, cfg.max_weight)
+        weights = np.array([smoothed_eq, 1.0 - smoothed_eq])
+
+        allocation_month = latest_date + pd.DateOffset(months=1)
+        print(f"\n╔══════════════════════════════════════════════════════════════╗")
+        print(f"║               CURRENT ALLOCATION SIGNAL                     ║")
+        print(f"╚══════════════════════════════════════════════════════════════╝")
+        print(f"  Data as of:              {latest_date.strftime('%Y-%m')}")
+        print(f"  Allocation for:          {allocation_month.strftime('%Y-%m')}")
+        print(f"  P(equity beats T-bills): {proba[0]:.3f}")
+        print(f"  P(T-bills win):          {proba[1]:.3f}")
+        print(f"  Crash overlay:           {overlay_reason}")
+        if market_data:
+            print(f"  Market signals:")
+            for k, v in sorted(market_data.items()):
+                print(f"    {k:>28s}: {v:+.2f}")
+        print(f"")
+        print(f"  ┌─────────────────────────────────┐")
+        print(f"  │  RECOMMENDED ALLOCATION          │")
+        for i, name in enumerate(cfg.asset_classes):
+            bar_len = int(weights[i] * 20)
+            bar = "█" * bar_len + "░" * (20 - bar_len)
+            print(f"  │  {name:>8s}: {weights[i]:6.1%}  {bar} │")
+        print(f"  └─────────────────────────────────┘")
+        return
 
     print("=" * 60)
     print("  MACRO REGIME ALLOCATOR — Equities vs T-Bills")
@@ -81,43 +148,34 @@ def main():
     bt = results["backtest"]
     final_model = results["final_model"]
 
-    # Step 5: Evaluate
-    print("\n── Step 5: Evaluation ────────────────────────────────────")
-    eval_results = evaluate(bt, final_model, cfg)
+    # Step 5: Live prediction (always runs)
+    print("\n── Step 5: Live Prediction ───────────────────────────────")
+    import numpy as np
 
-    # Step 6: Plots
-    print("\n── Step 6: Generate Plots ────────────────────────────────")
-    generate_all_plots(bt, eval_results, cfg)
-
-    # Latest prediction
-    if args.predict_latest:
-        from backtest import _gather_market_data
-        print("\n╔══════════════════════════════════════════════════════════════╗")
-        print("║               CURRENT ALLOCATION SIGNAL                     ║")
-        print("╚══════════════════════════════════════════════════════════════╝")
-        latest_date = features.index[-1]
-        latest_features = features.reindex(columns=final_model.feature_names).iloc[[-1]]
-        if latest_features.isna().any(axis=None):
-            missing = latest_features.columns[latest_features.isna().iloc[0]].tolist()
-            raise ValueError(f"Latest features missing: {missing}")
-
+    # Use full features (not intersected with labels) so the latest month is available
+    latest_date = features.index[-1]
+    latest_features = features.reindex(columns=final_model.feature_names).iloc[[-1]]
+    if latest_features.isna().any(axis=None):
+        missing = latest_features.columns[latest_features.isna().iloc[0]].tolist()
+        print(f"  WARNING: Latest features missing: {missing}")
+        print(f"  Skipping live prediction.")
+    else:
         proba = final_model.predict_proba(latest_features)[0]
-
-        # Apply crash overlay with current market data
+        pred_class = np.argmax(proba)
         market_data = _gather_market_data(merged, latest_date)
-        raw_proba, weights, overlay_reason = probabilities_to_weights(proba, cfg, market_data)
+        _, weights, overlay_reason = probabilities_to_weights(proba, cfg, market_data)
 
-        # Apply smoothing against last backtest weight if available
-        if len(bt) > 0:
-            prev_eq = bt["weight_equity"].iloc[-1]
-            target_eq = weights[0]
-            alpha = cfg.weight_smoothing_up if target_eq >= prev_eq else cfg.weight_smoothing_down
-            import numpy as np
-            smoothed_eq = np.clip(alpha * target_eq + (1 - alpha) * prev_eq,
-                                  cfg.min_weight, cfg.max_weight)
-            weights = np.array([smoothed_eq, 1.0 - smoothed_eq])
+        # Smooth against last backtest weight
+        prev_eq = results.get("prev_equity_weight", cfg.equal_weight[0])
+        target_eq = weights[0]
+        alpha = cfg.weight_smoothing_up if target_eq >= prev_eq else cfg.weight_smoothing_down
+        smoothed_eq = np.clip(alpha * target_eq + (1 - alpha) * prev_eq,
+                              cfg.min_weight, cfg.max_weight)
+        weights = np.array([smoothed_eq, 1.0 - smoothed_eq])
 
-        print(f"  As of:                   {latest_date.strftime('%Y-%m')}")
+        allocation_month = latest_date + pd.DateOffset(months=1)
+        print(f"  Data as of:              {latest_date.strftime('%Y-%m')}")
+        print(f"  Allocation for:          {allocation_month.strftime('%Y-%m')}")
         print(f"  P(equity beats T-bills): {proba[0]:.3f}")
         print(f"  P(T-bills win):          {proba[1]:.3f}")
         print(f"  Crash overlay:           {overlay_reason}")
@@ -133,6 +191,20 @@ def main():
             bar = "█" * bar_len + "░" * (20 - bar_len)
             print(f"  │  {name:>8s}: {weights[i]:6.1%}  {bar} │")
         print(f"  └─────────────────────────────────┘")
+
+    # Step 6: Evaluate
+    print("\n── Step 6: Evaluation ────────────────────────────────────")
+    eval_results = evaluate(bt, final_model, cfg)
+
+    # Step 7: Plots
+    print("\n── Step 7: Generate Plots ────────────────────────────────")
+    generate_all_plots(bt, eval_results, cfg)
+
+    # Robustness validation suite
+    if args.validate:
+        from validate import run_validation
+        print("\n── Step 8: Robustness Validation ─────────────────────────")
+        run_validation(features, labels, cfg)
 
     print("\n" + "=" * 60)
     print("  DONE")

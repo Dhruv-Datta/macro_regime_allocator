@@ -23,13 +23,22 @@ def _download_asset_prices(cfg: Config) -> pd.DataFrame:
                       auto_adjust=True, progress=False)
 
     if len(tickers) == 1:
-        prices = raw[["Close"]].copy()
-        prices.columns = [names[0]]
+        daily_close = raw[["Close"]].copy()
+        daily_close.columns = [names[0]]
     else:
-        prices = raw["Close"].copy()
-        prices.rename(columns={v: k for k, v in cfg.asset_tickers.items()}, inplace=True)
+        daily_close = raw["Close"].copy()
+        daily_close.rename(columns={v: k for k, v in cfg.asset_tickers.items()}, inplace=True)
 
-    prices = prices.resample("ME").last()
+    # Compute intramonth max drawdown from daily closes before resampling
+    def _month_max_dd(group):
+        cummax = group.cummax()
+        return (group / cummax - 1).min()
+
+    prices = daily_close.resample("ME").last()
+    for name in names:
+        monthly_dd = daily_close[name].resample("ME").apply(_month_max_dd) * 100
+        prices[f"{name}_intramonth_dd"] = monthly_dd
+
     prices.index.name = "date"
     return prices
 
@@ -118,7 +127,14 @@ def load_data(cfg: Config) -> pd.DataFrame:
 # ── Feature Engineering ─────────────────────────────────────────────────────
 
 def engineer_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
-    """Build the full feature matrix. All features lagged by macro_lag_months."""
+    """Build the full feature matrix. All features lagged by macro_lag_months.
+
+    The uniform 1-month lag serves two purposes:
+      - Macro series (CPI, unemployment) aren't published until weeks later.
+      - Market series (VIX, equity) at t-1 are PREDICTIVE of t+1 outcomes
+        (momentum persistence, volatility clustering), whereas t=0 values
+        describe damage that already happened this month.
+    """
     print("Engineering features...")
     feats = pd.DataFrame(index=df.index)
 
@@ -161,8 +177,10 @@ def engineer_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
         feats["equity_vol_3m"] = monthly_ret.rolling(cfg.volatility_window).std() * np.sqrt(12) * 100
         rolling_high = df["equity"].rolling(12).max()
         feats["equity_drawdown_from_high"] = (df["equity"] / rolling_high - 1) * 100
+        if "equity_intramonth_dd" in df.columns:
+            feats["equity_intramonth_dd"] = df["equity_intramonth_dd"]
 
-    # Lag all features to prevent lookahead
+    # Lag all features
     feats = feats.shift(cfg.macro_lag_months).dropna(how="all")
 
     print(f"  Features ({len(feats.columns)}): {list(feats.columns)}")

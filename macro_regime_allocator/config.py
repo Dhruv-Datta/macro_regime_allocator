@@ -74,11 +74,12 @@ class Config:
 
     # ── Model ───────────────────────────────────────────────────────────
     regularization_C: float = _Y.get("regularization_C", 0.5)
-    class_weight: Optional[str] = _Y.get("class_weight", "balanced")
+    class_weight: Optional[str] = _Y.get("class_weight", None)
     max_iter: int = _Y.get("max_iter", 1000)
     recency_halflife_months: int = _Y.get("recency_halflife_months", 18)
 
     # ── Backtest ────────────────────────────────────────────────────────
+    holdout_start: Optional[str] = _Y.get("holdout_start", None)
     window_type: str = _Y.get("window_type", "expanding")
     rolling_window_months: int = _Y.get("rolling_window_months", 120)
     min_train_months: int = _Y.get("min_train_months", 36)
@@ -113,6 +114,7 @@ class Config:
         backdate = (self.min_train_months + self.forecast_horizon_months
                     + self.macro_lag_months + 18)  # 18 for 12mo YoY + buffer
         return (dt - pd.DateOffset(months=backdate)).strftime("%Y-%m-%d")
+
 
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"
