@@ -28,8 +28,8 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict:
     # Filter out the synthetic start row (NaN port_return)
     bt_valid = bt.dropna(subset=["port_return"])
     if bt_valid.empty:
-        return {"cagr": np.nan, "sharpe": np.nan, "max_dd": np.nan,
-                "excess_cagr": np.nan, "hit_rate": np.nan,
+        return {"cagr": np.nan, "sharpe": np.nan, "excess_sharpe": np.nan,
+                "max_dd": np.nan, "excess_cagr": np.nan, "hit_rate": np.nan,
                 "calmar": np.nan, "ew_calmar": np.nan, "excess_calmar": np.nan,
                 "n_months": 0}
 
@@ -50,6 +50,10 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict:
     cagr_ew = cum_ew ** (1 / n_years) - 1 if n_years > 0 else 0
     excess_cagr = cagr - cagr_ew
 
+    ew_vol = ew.std() * np.sqrt(12)
+    ew_sharpe = cagr_ew / ew_vol if ew_vol > 0 else 0
+    excess_sharpe = sharpe - ew_sharpe
+
     hit_rate = (port > 0).mean()
 
     calmar = cagr / abs(max_dd) if max_dd != 0 else 0
@@ -60,8 +64,8 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict:
     excess_calmar = calmar - ew_calmar
 
     return {
-        "cagr": cagr, "sharpe": sharpe, "max_dd": max_dd,
-        "excess_cagr": excess_cagr, "hit_rate": hit_rate,
+        "cagr": cagr, "sharpe": sharpe, "excess_sharpe": excess_sharpe,
+        "max_dd": max_dd, "excess_cagr": excess_cagr, "hit_rate": hit_rate,
         "calmar": calmar, "ew_calmar": ew_calmar, "excess_calmar": excess_calmar,
         "n_months": n_months,
     }
@@ -86,10 +90,10 @@ def _run_variant(features, labels, cfg, name="variant", score_before=None):
     except Exception as e:
         print(f"  WARNING: {name} failed: {e}")
         return {"name": name, "cagr": np.nan, "sharpe": np.nan,
-                "max_dd": np.nan, "excess_cagr": np.nan,
-                "hit_rate": np.nan, "calmar": np.nan,
-                "ew_calmar": np.nan, "excess_calmar": np.nan,
-                "n_months": 0}
+                "excess_sharpe": np.nan, "max_dd": np.nan,
+                "excess_cagr": np.nan, "hit_rate": np.nan,
+                "calmar": np.nan, "ew_calmar": np.nan,
+                "excess_calmar": np.nan, "n_months": 0}
 
 
 # ── 1. Parameter Sensitivity ──────────────────────────────────────────────
@@ -345,6 +349,7 @@ def bootstrap_confidence(features: pd.DataFrame, labels: pd.DataFrame,
 
     rng = np.random.default_rng(42)
     sharpes = []
+    excess_sharpes = []
     excess_cagrs = []
 
     for _ in range(n_bootstrap):
@@ -366,16 +371,21 @@ def bootstrap_confidence(features: pd.DataFrame, labels: pd.DataFrame,
 
         cum_ew = (1 + boot_ew).prod()
         cagr_ew = cum_ew ** (1 / n_years) - 1 if n_years > 0 else 0
+        vol_ew = boot_ew.std() * np.sqrt(12)
+        sharpe_ew = cagr_ew / vol_ew if vol_ew > 0 else 0
 
         sharpes.append(sharpe_p)
+        excess_sharpes.append(sharpe_p - sharpe_ew)
         excess_cagrs.append(cagr_p - cagr_ew)
 
     sharpes = np.array(sharpes)
+    excess_sharpes = np.array(excess_sharpes)
     excess_cagrs = np.array(excess_cagrs)
 
     ci_levels = [2.5, 5, 25, 50, 75, 95, 97.5]
     rows = []
-    for metric_name, values in [("sharpe", sharpes), ("excess_cagr", excess_cagrs)]:
+    for metric_name, values in [("sharpe", sharpes), ("excess_sharpe", excess_sharpes),
+                                ("excess_cagr", excess_cagrs)]:
         row = {"metric": metric_name, "mean": values.mean(), "std": values.std()}
         for ci in ci_levels:
             row[f"p{ci:.0f}" if ci == int(ci) else f"p{ci}"] = np.percentile(values, ci)
@@ -385,14 +395,21 @@ def bootstrap_confidence(features: pd.DataFrame, labels: pd.DataFrame,
 
     # Key results
     sharpe_ci = (np.percentile(sharpes, 5), np.percentile(sharpes, 95))
+    excess_sharpe_ci = (np.percentile(excess_sharpes, 5), np.percentile(excess_sharpes, 95))
     excess_ci = (np.percentile(excess_cagrs, 5), np.percentile(excess_cagrs, 95))
     pct_positive_sharpe = (sharpes > 0).mean() * 100
+    pct_positive_excess_sharpe = (excess_sharpes > 0).mean() * 100
     pct_positive_excess = (excess_cagrs > 0).mean() * 100
 
     print(f"\n  Sharpe ratio:")
     print(f"    Mean:     {sharpes.mean():.3f}")
     print(f"    90% CI:   [{sharpe_ci[0]:.3f}, {sharpe_ci[1]:.3f}]")
     print(f"    P(>0):    {pct_positive_sharpe:.1f}%")
+
+    print(f"\n  Excess Sharpe vs baseline:")
+    print(f"    Mean:     {excess_sharpes.mean():+.3f}")
+    print(f"    90% CI:   [{excess_sharpe_ci[0]:+.3f}, {excess_sharpe_ci[1]:+.3f}]")
+    print(f"    P(>0):    {pct_positive_excess_sharpe:.1f}%")
 
     print(f"\n  Excess CAGR vs baseline:")
     print(f"    Mean:     {excess_cagrs.mean():.3%}")
@@ -788,11 +805,11 @@ def _save_validation_report(results: dict, output_dir: str):
     w("## 1. Parameter Sensitivity")
     w("")
     sens = results["sensitivity"]
-    w("| Param | Value | Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
-    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    w("| Param | Value | Sharpe | Excess Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for _, row in sens.iterrows():
         w(f"| {row.get('param', row['name'])} | {row.get('value', '-')} | "
-          f"{row['sharpe']:.3f} | {row['cagr']:.2%} | {row['max_dd']:.1%} | "
+          f"{row['sharpe']:.3f} | {row['excess_sharpe']:+.3f} | {row['cagr']:.2%} | {row['max_dd']:.1%} | "
           f"{row['calmar']:.3f} | {row['excess_calmar']:+.3f} |")
     w("")
 
@@ -800,10 +817,10 @@ def _save_validation_report(results: dict, output_dir: str):
     w("## 2. Ablation Studies")
     w("")
     abl = results["ablation"]
-    w("| Variant | Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
-    w("| :--- | ---: | ---: | ---: | ---: | ---: |")
+    w("| Variant | Sharpe | Excess Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for _, row in abl.iterrows():
-        w(f"| {row['name']} | {row['sharpe']:.3f} | {row['cagr']:.2%} | "
+        w(f"| {row['name']} | {row['sharpe']:.3f} | {row['excess_sharpe']:+.3f} | {row['cagr']:.2%} | "
           f"{row['max_dd']:.1%} | {row['calmar']:.3f} | {row['excess_calmar']:+.3f} |")
     w("")
 
@@ -811,10 +828,10 @@ def _save_validation_report(results: dict, output_dir: str):
     w("## 3. Subperiod Analysis")
     w("")
     sub = results["subperiod"]
-    w("| Period | Sharpe | CAGR | Max DD | Excess CAGR | Calmar | Excess Calmar | Months |")
-    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    w("| Period | Sharpe | Excess Sharpe | CAGR | Max DD | Excess CAGR | Calmar | Excess Calmar | Months |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for _, row in sub.iterrows():
-        w(f"| {row['name']} | {row['sharpe']:.3f} | {row['cagr']:.2%} | "
+        w(f"| {row['name']} | {row['sharpe']:.3f} | {row['excess_sharpe']:+.3f} | {row['cagr']:.2%} | "
           f"{row['max_dd']:.1%} | {row['excess_cagr']:.2%} | "
           f"{row['calmar']:.3f} | {row['excess_calmar']:+.3f} | {row['n_months']} |")
     w("")
