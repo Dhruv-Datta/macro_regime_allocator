@@ -1,6 +1,6 @@
 # Macro Regime Allocator — Performance Report
 
-*Generated 2026-03-25 15:32*
+*Generated 2026-03-25 15:59*
 
 **Config:** equity=SPY, horizon=1mo, window=expanding, baseline=95/5
 
@@ -107,6 +107,19 @@ Model beat equity in **6/26** years (23%)
 | :--- | ---: | ---: |
 | **equity** | 122 | 66 |
 | **tbills** | 72 | 36 |
+
+---
+## Defensive Accuracy
+
+*Does the model defend when it matters and ride the wave when it should?*
+
+| Metric | Value | Detail |
+| :--- | ---: | :--- |
+| Crisis hit rate | 58.6% | Went defensive in worst 29 equity months (bottom 10%) |
+| Calm ride rate | 62.2% | Stayed invested when equity beat T-bills |
+| Cost of false defense | 70.46% | Return given up on 71 false alarms |
+| Defense payoff | 80.74% | Losses avoided on 40 correct defensive calls |
+| Payoff ratio | 1.15x | Saved / cost (higher = better) |
 
 ---
 ## Weight Distribution

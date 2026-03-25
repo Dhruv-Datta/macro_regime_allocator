@@ -1,6 +1,6 @@
 # Robustness Validation Report
 
-*Generated 2026-03-25 15:33*
+*Generated 2026-03-25 16:00*
 
 ## 1. Parameter Sensitivity
 
@@ -74,7 +74,7 @@
 
 | Metric | Mean | Std | 5th | 25th | 50th | 75th | 95th |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| sharpe | 0.7710 | 0.2812 | 0.3060 | 0.5822 | 0.7808 | 0.9588 | 1.2460 |
+| sharpe | 0.7710 | 0.2812 | 0.3060 | 0.5823 | 0.7808 | 0.9588 | 1.2460 |
 | excess_cagr | 0.0127 | 0.0194 | -0.0145 | -0.0020 | 0.0115 | 0.0242 | 0.0500 |
 
 ## 5. Coefficient Stability
@@ -93,3 +93,15 @@
 | equity_momentum_3m | +0.2228 | 0.0602 | 0.2504 | 22.37% | 0.317 |
 | equity_vol_3m | -0.0296 | 0.0697 | 0.3023 | 22.71% | 0.725 |
 | equity_drawdown_from_high | +0.0140 | 0.0509 | 0.2808 | 27.80% | 0.442 |
+
+## 6. Defensive Accuracy
+
+*Does the model defend when it matters and ride the wave when it should?*
+
+| Metric | Value | Detail |
+| :--- | ---: | :--- |
+| Crisis hit rate | 58.6% | Went defensive in worst 29 equity months (bottom 10%) |
+| Calm ride rate | 62.2% | Stayed invested when equity beat T-bills |
+| Cost of false defense | 70.46% | Return given up on 71 false alarms |
+| Defense payoff | 80.74% | Losses avoided on 40 correct defensive calls |
+| Payoff ratio | 1.15x | Saved / cost (higher = better) |

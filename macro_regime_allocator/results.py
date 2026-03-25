@@ -91,7 +91,7 @@ def _fmt_f(v, decimals=2):
 
 def _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
                  dir_acc, weighted_acc, upside_cap, downside_cap,
-                 clf_acc, bal_acc, cm_df, ew_label):
+                 clf_acc, bal_acc, cm_df, ew_label, defensive_metrics):
     """Write a full performance report to outputs/report.md."""
     from datetime import datetime
     lines = []
@@ -236,6 +236,23 @@ def _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
         cells = [str(cm_df.loc[idx, c]) for c in cm_cols]
         w(f"| **{idx}** | " + " | ".join(cells) + " |")
 
+    # ── Defensive accuracy ──
+    dm = defensive_metrics
+    w(f"")
+    w(f"---")
+    w(f"## Defensive Accuracy")
+    w(f"")
+    w(f"*Does the model defend when it matters and ride the wave when it should?*")
+    w(f"")
+    w(f"| Metric | Value | Detail |")
+    w(f"| :--- | ---: | :--- |")
+    w(f"| Crisis hit rate | {dm['crisis_hit_rate']:.1%} | Went defensive in worst {dm['n_crisis_months']} equity months (bottom 10%) |")
+    w(f"| Calm ride rate | {dm['calm_ride_rate']:.1%} | Stayed invested when equity beat T-bills |")
+    w(f"| Cost of false defense | {dm['defense_cost']:.2%} | Return given up on {dm['n_false_defense']} false alarms |")
+    w(f"| Defense payoff | {dm['defense_payoff']:.2%} | Losses avoided on {dm['n_correct_defense']} correct defensive calls |")
+    ratio_str = f"{dm['defense_payoff_ratio']:.2f}x" if dm['defense_payoff_ratio'] != float('inf') else "inf"
+    w(f"| Payoff ratio | {ratio_str} | Saved / cost (higher = better) |")
+
     # ── Weight distribution ──
     w(f"")
     w(f"---")
@@ -342,6 +359,57 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
     print(f"\n  Per-class metrics:")
     print(classification_report(y_true, y_pred, target_names=class_names,
                                 labels=[0, 1], zero_division=0))
+
+    # Defensive accuracy metrics
+    baseline_eq = cfg.equal_weight[0]
+
+    # Crisis hit rate: of the worst 10% months for equity, how often did we go defensive?
+    equity_rets = valid["ret_equity"]
+    n_crisis = max(1, int(len(equity_rets) * 0.10))
+    crisis_threshold = equity_rets.nsmallest(n_crisis).iloc[-1]
+    crisis_months = valid[equity_rets <= crisis_threshold]
+    went_defensive_in_crisis = (crisis_months["weight_equity"] < baseline_eq).mean()
+
+    # Calm ride rate: of months where equity beat T-bills, how often did we stay at/above baseline?
+    calm_months = valid[valid["ret_equity"] > valid["ret_tbills"]]
+    stayed_invested = (calm_months["weight_equity"] >= baseline_eq - 0.01).mean() if len(calm_months) > 0 else 0
+
+    # Cost of defense: return given up on false defensive calls
+    false_defense = valid[(valid["weight_equity"] < baseline_eq - 0.01) & (valid["ret_equity"] > valid["ret_tbills"])]
+    if len(false_defense) > 0:
+        # What we returned vs what we would have returned at baseline
+        baseline_ret = baseline_eq * false_defense["ret_equity"] + (1 - baseline_eq) * false_defense["ret_tbills"]
+        defense_cost = (baseline_ret - false_defense["port_return"]).sum()
+    else:
+        defense_cost = 0.0
+
+    # Defense payoff: losses avoided on correct defensive calls
+    correct_defense = valid[(valid["weight_equity"] < baseline_eq - 0.01) & (valid["ret_equity"] <= valid["ret_tbills"])]
+    if len(correct_defense) > 0:
+        baseline_ret_cd = baseline_eq * correct_defense["ret_equity"] + (1 - baseline_eq) * correct_defense["ret_tbills"]
+        defense_payoff = (correct_defense["port_return"] - baseline_ret_cd).sum()
+    else:
+        defense_payoff = 0.0
+
+    defense_payoff_ratio = defense_payoff / defense_cost if defense_cost > 0 else float("inf")
+
+    print(f"\n── Defensive Accuracy ─────────────────────────────────────")
+    print(f"  Crisis hit rate:       {went_defensive_in_crisis:.1%}  (went defensive in {(crisis_months['weight_equity'] < baseline_eq).sum()}/{len(crisis_months)} worst months)")
+    print(f"  Calm ride rate:        {stayed_invested:.1%}  (stayed invested in {int(stayed_invested * len(calm_months))}/{len(calm_months)} up months)")
+    print(f"  Cost of false defense: {defense_cost:.2%}  (return given up on {len(false_defense)} false alarms)")
+    print(f"  Defense payoff:        {defense_payoff:.2%}  (losses avoided on {len(correct_defense)} correct calls)")
+    print(f"  Payoff ratio:          {defense_payoff_ratio:.2f}x  (saved / cost, higher = better)")
+
+    defensive_metrics = {
+        "crisis_hit_rate": went_defensive_in_crisis,
+        "calm_ride_rate": stayed_invested,
+        "defense_cost": defense_cost,
+        "defense_payoff": defense_payoff,
+        "defense_payoff_ratio": defense_payoff_ratio,
+        "n_crisis_months": len(crisis_months),
+        "n_false_defense": len(false_defense),
+        "n_correct_defense": len(correct_defense),
+    }
 
     # Investment metrics
     ew_label = f"{int(cfg.equal_weight[0]*100)}/{int(cfg.equal_weight[1]*100)}"
@@ -531,7 +599,7 @@ def evaluate(bt: pd.DataFrame, model: RegimeClassifier, cfg: Config) -> dict:
 
     _save_report(bt, inv_df, annual_data, coefs, eq_w, overlay_stats, cfg,
                  correct.mean(), weighted_acc, upside_capture, downside_capture,
-                 acc, bal_acc, cm_df, ew_label)
+                 acc, bal_acc, cm_df, ew_label, defensive_metrics)
 
     return {"classification": {"confusion_matrix": cm_df},
             "investment": inv_df, "coefficients": coefs}

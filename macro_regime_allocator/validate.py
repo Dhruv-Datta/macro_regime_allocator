@@ -520,6 +520,76 @@ def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
     return df
 
 
+# ── 6. Defensive Accuracy ──────────────────────────────────────────────────
+
+def _compute_defensive_metrics(features: pd.DataFrame, labels: pd.DataFrame,
+                               cfg: Config) -> dict:
+    """
+    Compute defensive accuracy metrics from a backtest run:
+    - Crisis hit rate: of the worst 10% equity months, how often did we go defensive?
+    - Calm ride rate: when equity won, how often did we stay invested?
+    - Cost of false defense: return given up on false alarms
+    - Defense payoff: losses avoided on correct defensive calls
+    - Payoff ratio: saved / cost
+    """
+    print("\n" + "=" * 60)
+    print("  DEFENSIVE ACCURACY")
+    print("=" * 60)
+
+    result = run_backtest(features, labels, cfg)
+    bt = result["backtest"].dropna(subset=["port_return"])
+    baseline_eq = cfg.equal_weight[0]
+
+    # Crisis hit rate
+    equity_rets = bt["ret_equity"]
+    n_crisis = max(1, int(len(equity_rets) * 0.10))
+    crisis_threshold = equity_rets.nsmallest(n_crisis).iloc[-1]
+    crisis_months = bt[equity_rets <= crisis_threshold]
+    went_defensive = (crisis_months["weight_equity"] < baseline_eq).mean()
+
+    # Calm ride rate
+    calm_months = bt[bt["ret_equity"] > bt["ret_tbills"]]
+    stayed_invested = (calm_months["weight_equity"] >= baseline_eq - 0.01).mean() if len(calm_months) > 0 else 0
+
+    # Cost of false defense
+    false_defense = bt[(bt["weight_equity"] < baseline_eq - 0.01) & (bt["ret_equity"] > bt["ret_tbills"])]
+    if len(false_defense) > 0:
+        baseline_ret = baseline_eq * false_defense["ret_equity"] + (1 - baseline_eq) * false_defense["ret_tbills"]
+        defense_cost = (baseline_ret - false_defense["port_return"]).sum()
+    else:
+        defense_cost = 0.0
+
+    # Defense payoff
+    correct_defense = bt[(bt["weight_equity"] < baseline_eq - 0.01) & (bt["ret_equity"] <= bt["ret_tbills"])]
+    if len(correct_defense) > 0:
+        baseline_ret_cd = baseline_eq * correct_defense["ret_equity"] + (1 - baseline_eq) * correct_defense["ret_tbills"]
+        defense_payoff = (correct_defense["port_return"] - baseline_ret_cd).sum()
+    else:
+        defense_payoff = 0.0
+
+    payoff_ratio = defense_payoff / defense_cost if defense_cost > 0 else float("inf")
+
+    metrics = {
+        "crisis_hit_rate": went_defensive,
+        "calm_ride_rate": stayed_invested,
+        "defense_cost": defense_cost,
+        "defense_payoff": defense_payoff,
+        "payoff_ratio": payoff_ratio,
+        "n_crisis_months": len(crisis_months),
+        "n_false_defense": len(false_defense),
+        "n_correct_defense": len(correct_defense),
+    }
+
+    print(f"\n  Crisis hit rate:       {went_defensive:.1%}  (defensive in {int(went_defensive * len(crisis_months))}/{len(crisis_months)} worst months)")
+    print(f"  Calm ride rate:        {stayed_invested:.1%}  (stayed invested in {int(stayed_invested * len(calm_months))}/{len(calm_months)} up months)")
+    print(f"  Cost of false defense: {defense_cost:.2%}  ({len(false_defense)} false alarms)")
+    print(f"  Defense payoff:        {defense_payoff:.2%}  ({len(correct_defense)} correct calls)")
+    ratio_str = f"{payoff_ratio:.2f}x" if payoff_ratio != float('inf') else "inf"
+    print(f"  Payoff ratio:          {ratio_str}  (saved / cost)")
+
+    return metrics
+
+
 # ── Master Runner ─────────────────────────────────────────────────────────
 
 def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
@@ -532,7 +602,7 @@ def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
 
     # 1. Parameter sensitivity
     print("\n\n" + "#" * 60)
-    print("  1/5  PARAMETER SENSITIVITY")
+    print("  1/6  PARAMETER SENSITIVITY")
     print("#" * 60)
     sens = parameter_sensitivity(features, labels, cfg)
     sens.to_csv(os.path.join(output_dir, "parameter_sensitivity.csv"), index=False)
@@ -540,7 +610,7 @@ def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
 
     # 2. Ablation studies
     print("\n\n" + "#" * 60)
-    print("  2/5  ABLATION STUDIES")
+    print("  2/6  ABLATION STUDIES")
     print("#" * 60)
     abl = ablation_studies(features, labels, cfg)
     abl.to_csv(os.path.join(output_dir, "ablation_studies.csv"), index=False)
@@ -548,7 +618,7 @@ def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
 
     # 3. Subperiod analysis
     print("\n\n" + "#" * 60)
-    print("  3/5  SUBPERIOD ANALYSIS")
+    print("  3/6  SUBPERIOD ANALYSIS")
     print("#" * 60)
     sub = subperiod_analysis(features, labels, cfg)
     sub.to_csv(os.path.join(output_dir, "subperiod_analysis.csv"), index=False)
@@ -556,7 +626,7 @@ def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
 
     # 4. Bootstrap confidence intervals
     print("\n\n" + "#" * 60)
-    print("  4/5  BOOTSTRAP CONFIDENCE")
+    print("  4/6  BOOTSTRAP CONFIDENCE")
     print("#" * 60)
     boot = bootstrap_confidence(features, labels, cfg)
     boot.to_csv(os.path.join(output_dir, "bootstrap_confidence.csv"), index=False)
@@ -564,11 +634,18 @@ def run_validation(features: pd.DataFrame, labels: pd.DataFrame,
 
     # 5. Coefficient stability
     print("\n\n" + "#" * 60)
-    print("  5/5  COEFFICIENT STABILITY")
+    print("  5/6  COEFFICIENT STABILITY")
     print("#" * 60)
     coef = coefficient_stability(features, labels, cfg)
     coef.to_csv(os.path.join(output_dir, "coefficient_stability.csv"))
     results["coefficients"] = coef
+
+    # 6. Defensive accuracy
+    print("\n\n" + "#" * 60)
+    print("  6/6  DEFENSIVE ACCURACY")
+    print("#" * 60)
+    defense = _compute_defensive_metrics(features, labels, cfg)
+    results["defensive"] = defense
 
     # Summary
     _print_summary(results)
@@ -770,6 +847,23 @@ def _save_validation_report(results: dict, output_dir: str):
             w(f"| {col} | {mean:+.4f} | {s.get('change_std', 0):.4f} | "
               f"{s.get('max_abs_jump', 0):.4f} | {s.get('spike_freq', 0):.2%} | "
               f"{s.get('instability', 0):.3f} |")
+
+    # Defensive accuracy
+    w("")
+    w("## 6. Defensive Accuracy")
+    w("")
+    w("*Does the model defend when it matters and ride the wave when it should?*")
+    w("")
+    dm = results.get("defensive", {})
+    if dm:
+        w("| Metric | Value | Detail |")
+        w("| :--- | ---: | :--- |")
+        w(f"| Crisis hit rate | {dm['crisis_hit_rate']:.1%} | Went defensive in worst {dm['n_crisis_months']} equity months (bottom 10%) |")
+        w(f"| Calm ride rate | {dm['calm_ride_rate']:.1%} | Stayed invested when equity beat T-bills |")
+        w(f"| Cost of false defense | {dm['defense_cost']:.2%} | Return given up on {dm['n_false_defense']} false alarms |")
+        w(f"| Defense payoff | {dm['defense_payoff']:.2%} | Losses avoided on {dm['n_correct_defense']} correct defensive calls |")
+        ratio_str = f"{dm['payoff_ratio']:.2f}x" if dm['payoff_ratio'] != float('inf') else "inf"
+        w(f"| Payoff ratio | {ratio_str} | Saved / cost (higher = better) |")
 
     report_path = os.path.join(output_dir, "validation_report.md")
     with open(report_path, "w") as f:
