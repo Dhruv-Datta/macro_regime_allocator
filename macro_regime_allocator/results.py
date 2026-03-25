@@ -653,18 +653,26 @@ def generate_all_plots(bt: pd.DataFrame, eval_results: dict, cfg: Config):
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
     _save(fig, cfg, "drawdowns.png")
 
-    # Equity weight over time
+    # Equity weight over time (step plot for instantaneous changes)
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.fill_between(bt.index, bt["weight_equity"], 0, alpha=0.4, color="#2196F3", label="Equity weight")
-    ax.fill_between(bt.index, bt["weight_equity"], 1, alpha=0.4, color="#4CAF50", label="T-Bills weight")
+    ax.fill_between(bt.index, bt["weight_equity"], 0, alpha=0.4, color="#2196F3",
+                    label="Equity weight", step="post")
+    ax.fill_between(bt.index, bt["weight_equity"], 1, alpha=0.4, color="#4CAF50",
+                    label="T-Bills weight", step="post")
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.5, label="50/50")
     ax.axhline(0.6, color="orange", linestyle=":", alpha=0.5, label="60/40")
     ax.set_title("Portfolio Equity Weight Over Time")
     ax.set_ylabel("Equity Weight")
     ax.set_ylim(0, 1)
-    ax.legend(loc="upper right")
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.02), ncol=4, fontsize="small",
+              frameon=True, borderaxespad=0)
     ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
+    ax.tick_params(axis="x", which="minor", length=4)
+    ax.tick_params(axis="x", which="major", length=7)
+    fig.subplots_adjust(top=0.88)
     _save(fig, cfg, "equity_weight_over_time.png")
 
     # Predicted probabilities
