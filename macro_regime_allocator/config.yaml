@@ -3,7 +3,11 @@
 # ======================================================================
 
 start_date: "2000-01-01"
-end_date: "2026-03-25"
+# end_date: set to the 1st of the month you want the allocation for.
+# Data through the prior month is used, and the live prediction tells
+# you the allocation for this month. e.g., "2026-03-01" means:
+# download data through Feb 2026, predict March allocation.
+end_date: "2026-03-01"
 
 equity_ticker: "SPY"
 forecast_horizon_months: 1

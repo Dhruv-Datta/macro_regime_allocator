@@ -115,6 +115,7 @@ class Config:
                     + self.macro_lag_months + 18)  # 18 for 12mo YoY + buffer
         return (dt - pd.DateOffset(months=backdate)).strftime("%Y-%m-%d")
 
+
     # ── Paths ───────────────────────────────────────────────────────────
     data_dir: str = "data"
     output_dir: str = "outputs"

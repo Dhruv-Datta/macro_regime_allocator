@@ -1,17 +1,13 @@
 SHELL := /bin/bash
-.PHONY: run predict signal fast validate validate-fast install clean
+.PHONY: run predict fast validate validate-fast install clean
 
-# Full run: download data + backtest + evaluate + plots
+# Full run: download data + backtest + evaluate + plots + live prediction
 run:
 	source .env.local && export FRED_API_KEY && uv run python main.py
 
-# Full run + show latest predicted allocation (downloads fresh data)
+# Quick predict: load saved model + cached data, show allocation only
 predict:
-	source .env.local && export FRED_API_KEY && uv run python main.py --predict-latest
-
-# Quick signal: what should I do this month? (uses cached data)
-signal:
-	source .env.local && export FRED_API_KEY && uv run python main.py --skip-download --predict-latest
+	source .env.local && export FRED_API_KEY && uv run python main.py --predict
 
 # Quick re-run using cached data (no download)
 fast:

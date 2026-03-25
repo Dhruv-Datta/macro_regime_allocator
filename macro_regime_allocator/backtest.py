@@ -307,4 +307,5 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     final_model.fit(X.loc[common], y.loc[common], sample_weight=sw * cw)
     final_model.save_model()
 
-    return {"backtest": bt, "final_model": final_model}
+    return {"backtest": bt, "final_model": final_model,
+            "prev_equity_weight": prev_equity_weight}
