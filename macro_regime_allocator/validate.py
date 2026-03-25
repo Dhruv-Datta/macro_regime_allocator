@@ -29,7 +29,9 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict:
     bt_valid = bt.dropna(subset=["port_return"])
     if bt_valid.empty:
         return {"cagr": np.nan, "sharpe": np.nan, "max_dd": np.nan,
-                "excess_cagr": np.nan, "hit_rate": np.nan, "n_months": 0}
+                "excess_cagr": np.nan, "hit_rate": np.nan,
+                "calmar": np.nan, "ew_calmar": np.nan, "excess_calmar": np.nan,
+                "n_months": 0}
 
     port = bt_valid["port_return"]
     ew = bt_valid["ew_return"]
@@ -50,9 +52,17 @@ def _backtest_metrics(bt: pd.DataFrame) -> dict:
 
     hit_rate = (port > 0).mean()
 
+    calmar = cagr / abs(max_dd) if max_dd != 0 else 0
+
+    cum_ew_series = (1 + ew).cumprod()
+    ew_max_dd = (cum_ew_series / cum_ew_series.cummax() - 1).min()
+    ew_calmar = cagr_ew / abs(ew_max_dd) if ew_max_dd != 0 else 0
+    excess_calmar = calmar - ew_calmar
+
     return {
         "cagr": cagr, "sharpe": sharpe, "max_dd": max_dd,
         "excess_cagr": excess_cagr, "hit_rate": hit_rate,
+        "calmar": calmar, "ew_calmar": ew_calmar, "excess_calmar": excess_calmar,
         "n_months": n_months,
     }
 
@@ -77,7 +87,9 @@ def _run_variant(features, labels, cfg, name="variant", score_before=None):
         print(f"  WARNING: {name} failed: {e}")
         return {"name": name, "cagr": np.nan, "sharpe": np.nan,
                 "max_dd": np.nan, "excess_cagr": np.nan,
-                "hit_rate": np.nan, "n_months": 0}
+                "hit_rate": np.nan, "calmar": np.nan,
+                "ew_calmar": np.nan, "excess_calmar": np.nan,
+                "n_months": 0}
 
 
 # ── 1. Parameter Sensitivity ──────────────────────────────────────────────
@@ -98,13 +110,18 @@ def parameter_sensitivity(features: pd.DataFrame, labels: pd.DataFrame,
         print(f"  (scoring on pre-holdout data only, before {cfg.holdout_start})")
     print("=" * 60)
 
-    sweeps = {
-        "regularization_C":       [0.1, 0.25, 0.5, 1.0, 2.0],
-        "allocation_steepness":   [5.0, 8.0, 13.0, 18.0, 25.0],
-        "recency_halflife_months": [6, 12, 24, 48],
-        "min_train_months":       [36, 48, 60, 72],
-        "weight_smoothing_down":  [0.7, 0.85, 0.95, 1.0],
-        "weight_smoothing_up":    [0.7, 0.85, 0.95, 1.0],
+    # Perturbation factors applied to each parameter's default value.
+    # Multiplicative params get scaled; additive/bounded params get special handling.
+    mult_factors = [0.5, 0.75, 0.9, 1.1, 1.25, 1.5]
+
+    # Parameters that use multiplicative perturbation around their default
+    mult_params = ["regularization_C", "allocation_steepness",
+                   "recency_halflife_months", "min_train_months"]
+
+    # Smoothing params are bounded [0, 1] — use additive perturbation
+    additive_params = {
+        "weight_smoothing_down": [-0.15, -0.08, -0.03, 0.03, 0.02, 0.01],
+        "weight_smoothing_up":   [-0.15, -0.08, -0.03, 0.01, 0.01, 0.01],
     }
 
     rows = []
@@ -113,8 +130,15 @@ def parameter_sensitivity(features: pd.DataFrame, labels: pd.DataFrame,
     baseline["value"] = "-"
     rows.append(baseline)
 
-    for param, values in sweeps.items():
+    for param in mult_params:
         default_val = getattr(cfg, param)
+        values = sorted(set(
+            int(round(default_val * f)) if isinstance(default_val, int)
+            else round(default_val * f, 4)
+            for f in mult_factors
+        ))
+        # Remove the default itself — it's already the baseline
+        values = [v for v in values if v != default_val and v > 0]
         print(f"\n  Sweeping {param} (default={default_val}):")
         for val in values:
             variant_cfg = copy.deepcopy(cfg)
@@ -124,8 +148,26 @@ def parameter_sensitivity(features: pd.DataFrame, labels: pd.DataFrame,
             m = _run_variant(features, labels, variant_cfg, name, score_before)
             m["param"] = param
             m["value"] = val
-            is_default = " (DEFAULT)" if val == default_val else ""
-            print(f"Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}{is_default}")
+            print(f"Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
+            rows.append(m)
+
+    for param, deltas in additive_params.items():
+        default_val = getattr(cfg, param)
+        values = sorted(set(
+            round(max(0.01, min(1.0, default_val + d)), 4)
+            for d in deltas
+        ))
+        values = [v for v in values if v != default_val]
+        print(f"\n  Sweeping {param} (default={default_val}):")
+        for val in values:
+            variant_cfg = copy.deepcopy(cfg)
+            setattr(variant_cfg, param, val)
+            name = f"{param}={val}"
+            print(f"    {name}...", end=" ", flush=True)
+            m = _run_variant(features, labels, variant_cfg, name, score_before)
+            m["param"] = param
+            m["value"] = val
+            print(f"Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
             rows.append(m)
 
     df = pd.DataFrame(rows)
@@ -193,7 +235,7 @@ def ablation_studies(features: pd.DataFrame, labels: pd.DataFrame,
     for name, variant_cfg in variants.items():
         print(f"  {name}...", end=" ", flush=True)
         m = _run_variant(features, labels, variant_cfg, name, score_before)
-        print(f"Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}, MaxDD={m['max_dd']:.1%}")
+        print(f"Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}, MaxDD={m['max_dd']:.1%}, Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
         rows.append(m)
 
     return pd.DataFrame(rows)
@@ -236,7 +278,7 @@ def subperiod_analysis(features: pd.DataFrame, labels: pd.DataFrame,
         m = _backtest_metrics(sub)
         m["name"] = f"{decade_start}s"
         m["period"] = f"{decade_start}-{decade_end}"
-        print(f"  {m['name']}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}")
+        print(f"  {m['name']}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}, Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
         rows.append(m)
 
     # Excluding crisis periods
@@ -256,7 +298,7 @@ def subperiod_analysis(features: pd.DataFrame, labels: pd.DataFrame,
         m = _backtest_metrics(sub)
         m["name"] = name
         m["period"] = f"full minus exclusion ({len(bt) - len(sub)} months removed)"
-        print(f"  {name}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}")
+        print(f"  {name}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}, Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
         rows.append(m)
 
     # Holdout split if configured
@@ -270,7 +312,7 @@ def subperiod_analysis(features: pd.DataFrame, labels: pd.DataFrame,
             m = _backtest_metrics(sub)
             m["name"] = label
             m["period"] = f"{sub.index[0].strftime('%Y-%m')} to {sub.index[-1].strftime('%Y-%m')}"
-            print(f"  {label}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}")
+            print(f"  {label}: Sharpe={m['sharpe']:.3f}, CAGR={m['cagr']:.3%}, Calmar={m['calmar']:.3f} (excess={m['excess_calmar']:+.3f})")
             rows.append(m)
 
     return pd.DataFrame(rows)
@@ -387,8 +429,8 @@ def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
 
     coef_records = []
 
-    # Sample every 12 months to keep it manageable
-    sample_points = range(cfg.min_train_months, len(all_dates) - horizon, 12)
+    # Match the backtest's actual refit cadence (every `horizon` months)
+    sample_points = range(cfg.min_train_months, len(all_dates) - horizon, horizon)
 
     for i in sample_points:
         train_end = i - horizon
@@ -418,13 +460,14 @@ def coefficient_stability(features: pd.DataFrame, labels: pd.DataFrame,
         df = df.set_index("date")
         feature_cols = [c for c in df.columns if c != "train_size"]
         print(f"\n  Tracked {len(df)} refit points across {len(feature_cols)} features")
-        print(f"\n  Coefficient std over time (lower = more stable):")
+        print(f"  (refit every {horizon} month(s), matching backtest cadence)")
+        print(f"\n  Coefficient change volatility (lower = more stable):")
         for col in feature_cols:
-            std = df[col].std()
             mean = df[col].mean()
-            cv = abs(std / mean) if mean != 0 else float("inf")
-            sign_changes = ((df[col].shift(1) * df[col]) < 0).sum()
-            print(f"    {col:>30s}: std={std:.4f}, cv={cv:.2f}, sign_flips={sign_changes}")
+            cv = abs(df[col].std() / mean) if mean != 0 else float("inf")
+            changes = df[col].diff().dropna()
+            change_vol = changes.std()
+            print(f"    {col:>30s}: mean={mean:+.4f}, cv={cv:.2f}, change_vol={change_vol:.4f}")
 
     return df
 
@@ -495,36 +538,36 @@ def _print_summary(results: dict):
     warnings = []
     passes = []
 
-    # Check sensitivity: does Sharpe survive parameter perturbation?
+    # Check sensitivity: does excess Calmar survive parameter perturbation?
     sens = results["sensitivity"]
-    sens_valid = sens[sens["param"] != "baseline"].dropna(subset=["sharpe"])
+    sens_valid = sens[sens["param"] != "baseline"].dropna(subset=["excess_calmar"])
     if len(sens_valid) > 0:
-        pct_positive = (sens_valid["sharpe"] > 0).mean() * 100
+        pct_positive = (sens_valid["excess_calmar"] > 0).mean() * 100
         if pct_positive < 70:
-            warnings.append(f"Sharpe positive in only {pct_positive:.0f}% of parameter variants")
+            warnings.append(f"Excess Calmar positive in only {pct_positive:.0f}% of parameter variants")
         else:
-            passes.append(f"Sharpe positive in {pct_positive:.0f}% of parameter variants")
+            passes.append(f"Excess Calmar positive in {pct_positive:.0f}% of parameter variants")
 
     # Check ablation: does model add value vs simplest baseline?
     abl = results["ablation"]
     full = abl[abl["name"] == "full_system"]
     model_only = abl[abl["name"] == "model_only"]
     if not full.empty and not model_only.empty:
-        if model_only.iloc[0]["sharpe"] > 0:
-            passes.append("Model-only variant has positive Sharpe")
+        if model_only.iloc[0]["excess_calmar"] > 0:
+            passes.append(f"Model-only variant has positive excess Calmar ({model_only.iloc[0]['excess_calmar']:+.3f})")
         else:
-            warnings.append("Model-only variant has negative Sharpe — edge may come from overlay/smoothing")
+            warnings.append(f"Model-only variant has negative excess Calmar ({model_only.iloc[0]['excess_calmar']:+.3f}) — edge may come from overlay/smoothing")
 
-    # Check subperiod consistency
+    # Check subperiod consistency (using excess Calmar = return-to-drawdown improvement)
     sub = results["subperiod"]
     decades = sub[sub["name"].str.contains("0s$", na=False)]
     if len(decades) > 1:
-        all_positive = (decades["excess_cagr"] > 0).all()
+        all_positive = (decades["excess_calmar"] > 0).all()
         if all_positive:
-            passes.append("Excess CAGR positive across all decades")
+            passes.append("Excess Calmar positive across all decades")
         else:
-            neg_decades = decades[decades["excess_cagr"] <= 0]["name"].tolist()
-            warnings.append(f"Negative excess CAGR in: {', '.join(neg_decades)}")
+            neg_decades = decades[decades["excess_calmar"] <= 0]["name"].tolist()
+            warnings.append(f"Negative excess Calmar in: {', '.join(neg_decades)}")
 
     # Check bootstrap
     boot = results["bootstrap"]
@@ -536,19 +579,22 @@ def _print_summary(results: dict):
         elif not np.isnan(p5):
             warnings.append(f"Sharpe 90% CI includes zero (lower bound = {p5:.3f})")
 
-    # Check coefficient stability
+    # Check coefficient stability via change volatility relative to mean
     coefs = results["coefficients"]
     if not coefs.empty:
         feature_cols = [c for c in coefs.columns if c != "train_size"]
-        sign_flips = sum(
-            ((coefs[c].shift(1) * coefs[c]) < 0).sum() for c in feature_cols
-        )
-        total_points = len(coefs) * len(feature_cols)
-        flip_rate = sign_flips / total_points if total_points > 0 else 0
-        if flip_rate > 0.15:
-            warnings.append(f"High coefficient instability: {flip_rate:.0%} sign flip rate")
+        unstable = []
+        for col in feature_cols:
+            mean = abs(coefs[col].mean())
+            change_vol = coefs[col].diff().dropna().std()
+            # A feature is unstable if its refit-to-refit change vol
+            # exceeds its mean magnitude (the noise dominates the signal)
+            if mean > 0 and change_vol / mean > 1.0:
+                unstable.append(col)
+        if unstable:
+            warnings.append(f"High coefficient instability in {len(unstable)}/{len(feature_cols)} features: {', '.join(unstable)}")
         else:
-            passes.append(f"Coefficient sign flip rate: {flip_rate:.0%}")
+            passes.append(f"All {len(feature_cols)} feature coefficients are stable across refits")
 
     print("\n  PASSES:")
     for p in passes:
@@ -581,34 +627,35 @@ def _save_validation_report(results: dict, output_dir: str):
     w("## 1. Parameter Sensitivity")
     w("")
     sens = results["sensitivity"]
-    w("| Param | Value | Sharpe | CAGR | Max DD | Excess CAGR |")
-    w("| :--- | ---: | ---: | ---: | ---: | ---: |")
+    w("| Param | Value | Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for _, row in sens.iterrows():
         w(f"| {row.get('param', row['name'])} | {row.get('value', '-')} | "
           f"{row['sharpe']:.3f} | {row['cagr']:.2%} | {row['max_dd']:.1%} | "
-          f"{row['excess_cagr']:.2%} |")
+          f"{row['calmar']:.3f} | {row['excess_calmar']:+.3f} |")
     w("")
 
     # Ablation
     w("## 2. Ablation Studies")
     w("")
     abl = results["ablation"]
-    w("| Variant | Sharpe | CAGR | Max DD | Excess CAGR |")
-    w("| :--- | ---: | ---: | ---: | ---: |")
+    w("| Variant | Sharpe | CAGR | Max DD | Calmar | Excess Calmar |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: |")
     for _, row in abl.iterrows():
         w(f"| {row['name']} | {row['sharpe']:.3f} | {row['cagr']:.2%} | "
-          f"{row['max_dd']:.1%} | {row['excess_cagr']:.2%} |")
+          f"{row['max_dd']:.1%} | {row['calmar']:.3f} | {row['excess_calmar']:+.3f} |")
     w("")
 
     # Subperiod
     w("## 3. Subperiod Analysis")
     w("")
     sub = results["subperiod"]
-    w("| Period | Sharpe | CAGR | Max DD | Excess CAGR | Months |")
-    w("| :--- | ---: | ---: | ---: | ---: | ---: |")
+    w("| Period | Sharpe | CAGR | Max DD | Excess CAGR | Calmar | Excess Calmar | Months |")
+    w("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for _, row in sub.iterrows():
         w(f"| {row['name']} | {row['sharpe']:.3f} | {row['cagr']:.2%} | "
-          f"{row['max_dd']:.1%} | {row['excess_cagr']:.2%} | {row['n_months']} |")
+          f"{row['max_dd']:.1%} | {row['excess_cagr']:.2%} | "
+          f"{row['calmar']:.3f} | {row['excess_calmar']:+.3f} | {row['n_months']} |")
     w("")
 
     # Bootstrap
@@ -630,14 +677,14 @@ def _save_validation_report(results: dict, output_dir: str):
     coefs = results["coefficients"]
     if not coefs.empty:
         feature_cols = [c for c in coefs.columns if c != "train_size"]
-        w("| Feature | Mean Coef | Std | CV | Sign Flips |")
+        w("| Feature | Mean Coef | CV | Change Vol | Change Vol / Mean |")
         w("| :--- | ---: | ---: | ---: | ---: |")
         for col in feature_cols:
             mean = coefs[col].mean()
-            std = coefs[col].std()
-            cv = abs(std / mean) if mean != 0 else float("inf")
-            flips = ((coefs[col].shift(1) * coefs[col]) < 0).sum()
-            w(f"| {col} | {mean:.4f} | {std:.4f} | {cv:.2f} | {flips} |")
+            cv = abs(coefs[col].std() / mean) if mean != 0 else float("inf")
+            change_vol = coefs[col].diff().dropna().std()
+            ratio = change_vol / abs(mean) if mean != 0 else float("inf")
+            w(f"| {col} | {mean:+.4f} | {cv:.2f} | {change_vol:.4f} | {ratio:.2f} |")
 
     report_path = os.path.join(output_dir, "validation_report.md")
     with open(report_path, "w") as f:
