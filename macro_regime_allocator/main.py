@@ -19,7 +19,7 @@ import pandas as pd
 
 from config import Config
 from data import load_data, engineer_features, build_labels
-from backtest import run_backtest, probabilities_to_weights
+from backtest import run_backtest, probabilities_to_weights, _gather_market_data
 from results import evaluate, generate_all_plots
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -51,8 +51,6 @@ def main():
     if args.predict:
         import numpy as np
         from model import RegimeClassifier
-        from backtest import probabilities_to_weights, _gather_market_data
-
         merged_path = os.path.join(cfg.data_dir, "merged_monthly.csv")
         if not os.path.exists(merged_path):
             print(f"ERROR: {merged_path} not found. Run a full backtest first.")
@@ -153,7 +151,6 @@ def main():
     # Step 5: Live prediction (always runs)
     print("\n── Step 5: Live Prediction ───────────────────────────────")
     import numpy as np
-    from backtest import _gather_market_data
 
     # Use full features (not intersected with labels) so the latest month is available
     latest_date = features.index[-1]
