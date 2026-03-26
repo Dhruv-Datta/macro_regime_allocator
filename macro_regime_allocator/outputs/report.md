@@ -1,6 +1,6 @@
 # Macro Regime Allocator — Performance Report
 
-*Generated 2026-03-25 20:15*
+*Generated 2026-03-26 10:53*
 
 **Config:** equity=SPY, horizon=1mo, window=expanding, baseline=95/5
 
