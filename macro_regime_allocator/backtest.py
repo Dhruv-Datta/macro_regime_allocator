@@ -148,13 +148,12 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
       3. Map to weights via sigmoid + crash overlay + smoothing
       4. Earn 1-month return
     """
-    # Align features and labels
-    common_idx = features.index.intersection(labels.index)
-    features = features.loc[common_idx].copy()
-    labels = labels.loc[common_idx].copy()
-
+    # Prepare features: drop rows with any NaN
     valid_mask = features.notna().all(axis=1)
-    features, labels = features.loc[valid_mask], labels.loc[valid_mask]
+    features = features.loc[valid_mask].copy()
+
+    # Labels are only needed for training — prediction universe is all valid features
+    y_all = labels["label"]
 
     print(f"Backtest universe: {len(features)} months from "
           f"{features.index[0].strftime('%Y-%m')} to "
@@ -171,7 +170,7 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
         raise ValueError(f"T-bills rate series '{rate_col}' not found in data.")
     monthly_returns["tbills"] = merged[rate_col].shift(1) / 100 / 12
 
-    X, y = features, labels["label"]
+    X = features
     all_dates = X.index.tolist()
     horizon = cfg.forecast_horizon_months
     ew = np.array(cfg.equal_weight)
@@ -181,7 +180,7 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
 
     # Step size: for horizon > 1, skip forward by horizon months to avoid
     # overlapping holding periods (each decision holds for `horizon` months).
-    for i in range(cfg.min_train_months, len(all_dates) - horizon, horizon):
+    for i in range(cfg.min_train_months, len(all_dates), horizon):
         rebalance_date = all_dates[i]
 
         # Only train on labels whose forward window is fully realized
@@ -192,12 +191,15 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
         # ── Train ───────────────────────────────────────────────────────
         train_start = 0 if cfg.window_type == "expanding" else max(0, train_end - cfg.rolling_window_months)
         train_idx = all_dates[train_start:train_end]
-        X_train, y_train = X.loc[train_idx], y.loc[train_idx]
+        # Only use dates that have labels for training
+        train_idx_with_labels = [d for d in train_idx if d in y_all.index]
+        X_train = X.loc[train_idx_with_labels]
+        y_train = y_all.loc[train_idx_with_labels]
 
         if len(y_train) < cfg.min_train_months or y_train.nunique() < 2:
             continue
 
-        sw = _recency_weights(len(train_idx), cfg.recency_halflife_months)
+        sw = _recency_weights(len(train_idx_with_labels), cfg.recency_halflife_months)
         cw = _class_balanced_weights(y_train.values)
         model = RegimeClassifier(cfg)
         model.fit(X_train, y_train, sample_weight=sw * cw)
@@ -219,13 +221,12 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
 
         # ── Realized returns over the full holding period ──────────────
         # Compound monthly returns for `horizon` months (or fewer at end)
-        holding_dates = all_dates[i + 1 : i + 1 + horizon]
+        next_dates = [d for d in all_dates[i + 1 : i + 1 + horizon]
+                      if d in monthly_returns.index]
         cum_eq = 1.0
         cum_tb = 1.0
         valid_months = 0
-        for hd in holding_dates:
-            if hd not in monthly_returns.index:
-                break
+        for hd in next_dates:
             ret_eq_m = monthly_returns.loc[hd, "equity"]
             ret_tb_m = monthly_returns.loc[hd, "tbills"]
             if np.isnan(ret_eq_m) or np.isnan(ret_tb_m):
@@ -235,16 +236,34 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
             valid_months += 1
 
         if valid_months == 0:
+            # No realized returns yet (e.g. last month) — still record the prediction
+            results.append({
+                "rebalance_date": rebalance_date,
+                "return_date": rebalance_date,
+                "pred_class": pred_class,
+                "actual_label": np.nan,
+                "prob_equity": proba[0],
+                "prob_tbills": proba[1],
+                "weight_equity": weights[0],
+                "weight_tbills": weights[1],
+                "overlay": overlay_reason,
+                "ret_equity": np.nan,
+                "ret_tbills": np.nan,
+                "port_return": np.nan,
+                "ew_return": np.nan,
+                "ret_6040": np.nan,
+                "train_size": train_end,
+            })
             continue
 
         ret_eq = cum_eq - 1
         ret_tbills = cum_tb - 1
         realized = np.array([ret_eq, ret_tbills])
-        actual_label = y.loc[rebalance_date] if rebalance_date in y.index else np.nan
+        actual_label = y_all.loc[rebalance_date] if rebalance_date in y_all.index else np.nan
 
         results.append({
             "rebalance_date": rebalance_date,
-            "return_date": holding_dates[valid_months - 1],
+            "return_date": next_dates[valid_months - 1],
             "pred_class": pred_class,
             "actual_label": actual_label,
             "prob_equity": proba[0],
@@ -274,11 +293,12 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
         raise RuntimeError(f"No predictions on or after start_date {cfg.start_date}.")
 
     # Cumulative series (starts at 1.0 on the first date)
+    # Fill NaN returns with 0 for cumprod (unrealized months don't affect cumulative)
     cum_cols = []
     for col, src in [("cum_port", "port_return"), ("cum_ew", "ew_return"),
                      ("cum_equity", "ret_equity"), ("cum_tbills", "ret_tbills"),
                      ("cum_6040", "ret_6040")]:
-        bt[col] = 100 * (1 + bt[src]).cumprod()
+        bt[col] = 100 * (1 + bt[src].fillna(0)).cumprod()
         cum_cols.append(col)
 
     # Prepend a $1.00 starting row so charts begin at 1.0
@@ -300,11 +320,11 @@ def run_backtest(features: pd.DataFrame, labels: pd.DataFrame, cfg: Config) -> d
     # Train final model on all available data
     final_model = RegimeClassifier(cfg)
     final_idx = all_dates[:len(all_dates) - horizon]
-    y_final = y.loc[y.index.isin(final_idx)].dropna()
+    y_final = y_all.loc[y_all.index.isin(final_idx)].dropna()
     common = X.index.intersection(y_final.index)
     sw = _recency_weights(len(common), cfg.recency_halflife_months)
-    cw = _class_balanced_weights(y.loc[common].values)
-    final_model.fit(X.loc[common], y.loc[common], sample_weight=sw * cw)
+    cw = _class_balanced_weights(y_all.loc[common].values)
+    final_model.fit(X.loc[common], y_all.loc[common], sample_weight=sw * cw)
     final_model.save_model()
 
     return {"backtest": bt, "final_model": final_model,

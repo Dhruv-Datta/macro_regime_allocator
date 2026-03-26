@@ -108,11 +108,15 @@ class Config:
     def data_start_date(self) -> str:
         """Backdate start_date so the model has enough training data and
         predictions begin AT start_date.  Accounts for min_train_months,
-        forecast horizon, macro lag, and feature-engineering lookback."""
+        forecast horizon, macro lag, feature-engineering lookback, and
+        late-starting FRED series (credit spread starts Jan 1997)."""
         import pandas as pd
         dt = pd.Timestamp(self.start_date)
+        # 12 = YoY inflation lookback, 3 = credit_spread diff(3),
+        # 6 = extra buffer for late-starting FRED series
+        feature_warmup = 12 + 3 + 6
         backdate = (self.min_train_months + self.forecast_horizon_months
-                    + self.macro_lag_months + 18)  # 18 for 12mo YoY + buffer
+                    + self.macro_lag_months + feature_warmup)
         return (dt - pd.DateOffset(months=backdate)).strftime("%Y-%m-%d")
 
 
